@@ -82,6 +82,7 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         pointer.MinTravelMs = Settings.MinTravelMs.Value;
         pointer.TravelMsPerRootPx = Settings.TravelMsPerRootPx.Value;
         pointer.ArcPercent = Settings.ArcPercent.Value;
+        pointer.StayPut = Settings.StayPut.Value;
         pointer.OnModifier ??= key => KeysFor(who).Hold(key);
         pointer.TolerancePx = _tolerances.TryGetValue(who, out var px) ? px : Settings.TolerancePx.Value;
         return pointer;
@@ -101,7 +102,7 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
             return false;
 
         var pointer = PointerFor(who);
-        pointer.Place(pointer.PointIn(rect), Modifiers(ctrl, shift));
+        pointer.Aim(rect, Modifiers(ctrl, shift));
         return true;
     }
 

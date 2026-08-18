@@ -25,6 +25,9 @@ internal static class Program
         failed += AimCases.Run();
 
         Console.WriteLine();
+        failed += PointerCases.Run();
+
+        Console.WriteLine();
         failed += TravelCases.Run();
 
         Console.WriteLine();

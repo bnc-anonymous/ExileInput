@@ -36,9 +36,21 @@ internal sealed class Travel
     private readonly Vector2 _bow;
     private readonly float _ms;
 
+    /// <summary>
+    /// What time it is, for driving a journey by hand.
+    ///
+    /// A journey is a few hundred milliseconds of cursor moving too fast to watch, so the only way
+    /// to examine one is to advance it yourself. Same reading-not-interval shape as the lease.
+    /// </summary>
+    private readonly Func<TimeSpan> _now;
+
+    private TimeSpan Elapsed => _now?.Invoke() ?? _since.Elapsed;
+
     public Travel(Vector2 from, Vector2 to, float minMs, float msPerRootPx, float arcPercent,
-        Random rng)
+        Random rng, Func<TimeSpan> now = null)
     {
+        _now = now;
+
         _from = from;
         _to = to;
 
@@ -63,7 +75,7 @@ internal sealed class Travel
     public float Ms => _ms;
 
     /// <summary>How far through the journey, from nought to one.</summary>
-    public float Progress => ProgressAt((float)_since.Elapsed.TotalMilliseconds);
+    public float Progress => ProgressAt((float)Elapsed.TotalMilliseconds);
 
     public bool Done => Progress >= 1f;
 

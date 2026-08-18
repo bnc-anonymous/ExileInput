@@ -36,6 +36,21 @@ internal sealed class MousePointer
     }
 
     /// <summary>
+    /// Where the cursor is, and how to put it somewhere - both replaceable.
+    ///
+    /// So that the wiring can be tested and not just the sums. The rect bound was written, given a
+    /// table of its own, reported as fixed and was never once reached: Move calls Place directly,
+    /// Place resets the bound, and only Aim set it. Every case passed, because every case called
+    /// the arithmetic rather than the pointer.
+    /// </summary>
+    internal Func<Vector2> Cursor { get; set; }
+
+    internal Action<Vector2> Send { get; set; }
+
+    /// <summary>What time it is, handed on to each journey so a test can advance one.</summary>
+    internal Func<TimeSpan> Clock { get; set; }
+
+    /// <summary>
     /// How much of a target to aim within, as a percentage of its size.
     ///
     /// Nought is dead centre every time, which is both conspicuous and brittle - a rect read a
@@ -147,12 +162,62 @@ internal sealed class MousePointer
     /// </summary>
     internal const float TightestPx = 3f;
 
-    /// <summary>Picks a point inside the rect, sends the cursor there, and returns the point.</summary>
-    public Vector2 Aim(RectangleF rect)
+    /// <summary>
+    /// Whether to leave the cursor alone when it is already on the thing being aimed at.
+    ///
+    /// A hand that is already resting on a button does not lift off and land again on it before
+    /// pressing. Twitching forty pixels to a different spot inside the same row is a movement with
+    /// no purpose behind it, which is a worse tell than not moving at all - and it costs a journey
+    /// each time for nothing.
+    ///
+    /// The click still happens, modifiers and all; only the travel is skipped.
+    /// </summary>
+    public bool StayPut { get; set; } = true;
+
+    /// <summary>
+    /// Whether a point is inside a rect with enough room to be worth staying at.
+    ///
+    /// Inset rather than the bare rect. A rect is often drawn a shade larger than the thing it
+    /// stands for, and the aim spread exists to keep away from exactly that margin - so staying on
+    /// a pixel the aim would never have chosen would trade a micro-movement for a click on the
+    /// boundary. Three pixels in, the same figure the bound floors at.
+    /// </summary>
+    internal static bool Holds(RectangleF rect, Vector2 point) =>
+        point.X >= rect.Left + TightestPx && point.X <= rect.Right - TightestPx &&
+        point.Y >= rect.Top + TightestPx && point.Y <= rect.Bottom - TightestPx;
+
+    /// <summary>
+    /// Aims at a rect: picks a point inside it, sends the cursor there, and returns the point.
+    ///
+    /// The one way a rect is aimed at. It used not to be - Move picked its own point and called
+    /// Place, so this was dead code and the bound it sets was never applied to anything.
+    /// </summary>
+    public Vector2 Aim(RectangleF rect, params Keys[] modifiers)
     {
+        var here = Where();
+
+        // Already on it: keep the cursor where it is and treat that as the arrival. Expected has
+        // to be the actual position rather than the middle of the rect, or the drift check spends
+        // its timeout measuring the distance to a place nothing intends to go.
+        if (StayPut && Holds(rect, here))
+        {
+            Expected = here;
+            Awaiting = true;
+            _travel = null;
+
+            // Nothing to overlap the press with, so it happens now and gets whatever time the
+            // caller takes to notice the arrival - which is at least a tick.
+            _modifiers = modifiers ?? [];
+            _modifiersDown = false;
+            PressModifiers();
+
+            _bound = BoundFor(rect, here);
+            return here;
+        }
+
         var target = PointIn(rect);
 
-        Place(target);
+        Place(target, modifiers);
 
         // After Place, which resets it: the bound belongs to this target, not the last one.
         _bound = BoundFor(rect, target);
@@ -188,7 +253,7 @@ internal sealed class MousePointer
             return;
         }
 
-        _travel = new Travel(Where(), client, MinTravelMs, TravelMsPerRootPx, ArcPercent, _rng);
+        _travel = new Travel(Where(), client, MinTravelMs, TravelMsPerRootPx, ArcPercent, _rng, Clock);
     }
 
     /// <summary>
@@ -224,6 +289,9 @@ internal sealed class MousePointer
     /// <summary>Where the cursor is now, in client space.</summary>
     private Vector2 Where()
     {
+        if (Cursor != null)
+            return Cursor();
+
         try
         {
             return new Vector2(_gc.IngameState.MousePosX, _gc.IngameState.MousePosY);
@@ -237,23 +305,18 @@ internal sealed class MousePointer
     /// <summary>The one place the window origin is added.</summary>
     private void Put(Vector2 client)
     {
+        if (Send != null)
+        {
+            Send(client);
+            return;
+        }
+
         var origin = _gc.Window.GetWindowRectangle().TopLeft;
         Input.SetCursorPos(new Vector2(origin.X + client.X, origin.Y + client.Y));
     }
 
     /// <summary>How far the cursor is from where it was sent, in client-space pixels.</summary>
-    public float Drift()
-    {
-        try
-        {
-            var now = new Vector2(_gc.IngameState.MousePosX, _gc.IngameState.MousePosY);
-            return Vector2.Distance(now, Expected);
-        }
-        catch
-        {
-            return 0f;
-        }
-    }
+    public float Drift() => Vector2.Distance(Where(), Expected);
 
     /// <summary>
     /// Whether the cursor has reached where it was sent.

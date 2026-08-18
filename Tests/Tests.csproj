@@ -25,4 +25,20 @@
     <ProjectReference Include="..\ExileInput.csproj" />
   </ItemGroup>
 
+  <!--
+    ExileCore, only because the pointer takes a GameController and the cases construct one with
+    null. Nothing here calls into it - the two seams stand in for the game - but the type has to be
+    resolvable for the constructor to bind.
+  -->
+  <ItemGroup>
+    <Reference Include="ExileCore">
+      <HintPath>$(exapiPackage)\ExileCore.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="GameOffsets">
+      <HintPath>$(exapiPackage)\GameOffsets.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
 </Project>

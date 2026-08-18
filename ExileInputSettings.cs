@@ -16,6 +16,18 @@ public class ExileInputSettings : ISettings
         "One figure for every plugin that asks, which is the point of this living here.")]
     public RangeNode<int> SpreadPercent { get; set; } = new RangeNode<int>(50, 0, 95);
 
+    [Menu("Stay Put When Already There",
+        "Leave the cursor alone when it is already on the thing being aimed at.\n\n" +
+        "A hand resting on a button does not lift off and land again on it before pressing. " +
+        "Twitching forty pixels to a different spot inside the same row is a movement with nothing " +
+        "behind it, which reads worse than not moving, and it costs a journey each time to end up " +
+        "where it started.\n\n" +
+        "The click still goes out, modifiers and all - only the travel is skipped. Counted three " +
+        "pixels inside the edge rather than the bare rect, because a rect is often drawn a shade " +
+        "larger than the thing it stands for and staying on that margin would trade a small " +
+        "movement for a click on the boundary.")]
+    public ToggleNode StayPut { get; set; } = new ToggleNode(true);
+
     [Menu("Arrived Within (px)",
         "How near the cursor must be to where it was sent before a click is allowed.\n\n" +
         "Not zero: the game reports its cursor a frame or two behind, and rounding means the pixel " +
