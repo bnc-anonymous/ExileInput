@@ -1,13 +1,10 @@
 using ExileCore;
-using System;
-using System.Diagnostics;
-using System.Threading;
 using System.Windows.Forms;
 
 namespace ExileInput;
 
 /// <summary>
-/// One place where a modified click is sent, because there were three and they disagreed.
+/// The button and the modifier keys, as things that can be done and asked about - and nothing else.
 ///
 /// Lifted from the currency flipper, where the reasoning below was paid for. The shuttle paused
 /// between pressing control and clicking; the collector and the roller sent both in the same breath.
@@ -26,92 +23,14 @@ namespace ExileInput;
 /// gave up on being opened. A check that never answers is not evidence of anything, so it is asked
 /// once, believed if it ever answers, and dropped if it never does.
 ///
-/// Note what this costs: <see cref="Send"/> blocks its caller for the confirmation poll and the
-/// holds either side of the press, which on a bad reading is the better part of half a second on
-/// the render thread. That is the price of doing the whole gesture at the destination. Holding the
-/// modifier across the approach instead removes it, and is what <see cref="MousePointer"/> exists to
-/// make possible.
+/// What is *not* here any more is the waiting. This used to own a Send that pressed the modifier,
+/// polled up to 200ms for it to read back, held 60ms either side of the click and released - all on
+/// the calling thread, which in this HUD is the one thread that draws every plugin. Better than a
+/// third of a second of frozen overlay, for one click. The waiting happens across ticks in
+/// <see cref="Stroke"/> now, and what is left here does its thing and returns.
 /// </summary>
 internal static class Buttons
 {
-    /// <summary>How long to wait for the game to agree the modifier is held.</summary>
-    private const int ConfirmMs = 200;
-
-    /// <summary>How often to ask while waiting.</summary>
-    private const int PollMs = 5;
-
-    /// <summary>
-    /// Sends a click, holding control across it when asked, and says whether it went.
-    ///
-    /// False only where the key state is readable here and says control is not down - a real no,
-    /// and the click would have been the wrong one. The caller keeps its state and tries again
-    /// rather than treating a gesture that did not happen as one that did.
-    /// </summary>
-    public static bool Send(bool ctrl, bool right, int holdMs, bool shift = false)
-    {
-        var hold = Math.Clamp(holdMs, 0, 200);
-
-        if (!ctrl && !shift)
-        {
-            Click(right);
-            return true;
-        }
-
-        try
-        {
-            if (shift)
-                Input.KeyDown(Keys.LShiftKey);
-
-            Input.KeyDown(Keys.LControlKey);
-
-            var seen = Confirmed();
-
-            if (seen)
-            {
-                _readable = true;
-            }
-            else if (_readable == true)
-            {
-                // It has answered before, so this is a real no rather than a check that does not
-                // work here. Nothing is clicked, and the caller keeps the click for another go.
-                return false;
-            }
-            else
-            {
-                // Never once answered. Which means the state cannot be read from here rather than
-                // that control is not down - and refusing on that reading is how a check meant to
-                // prevent one bad click prevented every good one instead.
-                _readable = false;
-            }
-
-            // Given a moment either way: the game noticing the key and the game acting on a click
-            // that arrives with it are not the same instant.
-            if (hold > 0)
-                Thread.Sleep(hold);
-
-            Click(right);
-
-            if (hold > 0)
-                Thread.Sleep(hold);
-
-            return true;
-        }
-        finally
-        {
-            Release();
-        }
-    }
-
-    /// <summary>
-    /// Sends a click and nothing else, for a caller already holding whatever it needs held.
-    ///
-    /// The half of <see cref="Send"/> that is just the press. A caller that pressed its modifier
-    /// during the approach has already had the whole approach to confirm it, so there is nothing
-    /// left here to wait for - and nothing here releases anything, because the caller decides when
-    /// the modifier comes up.
-    /// </summary>
-    public static void Press(bool right) => Click(right);
-
     /// <summary>
     /// Whether the key state can be read at all from here.
     ///
@@ -124,13 +43,85 @@ internal static class Buttons
     /// <summary>Whether the key state has ever been readable, for saying so on a panel.</summary>
     public static bool? Readable => _readable;
 
+    /// <summary>Remembers that the state answered, so a later silence is a real no.</summary>
+    public static void Answered() => _readable = true;
+
     /// <summary>
-    /// Whether a modifier reads as held, asked both ways it might be visible.
+    /// Remembers that it never answers here, so nothing waits on it again.
     ///
-    /// Public because the point of holding a modifier across an approach is to have somewhere to do
-    /// this that is not the moment of the click.
+    /// Only called once a whole confirmation window has gone by with no answer, and never over the
+    /// top of a yes. Learning it from the first tick that reads nothing would learn "unreadable"
+    /// from a key that had simply not arrived yet, and then never ask again.
     /// </summary>
-    public static bool ControlIsDown() => Confirmed();
+    public static void NeverAnswers() => _readable ??= false;
+
+    /// <summary>
+    /// Whether control reads as held, asked both ways it might be visible.
+    ///
+    /// The Windows async state first, since that is where an injected key lands if it was injected
+    /// at all, and the game's own view second. Either answering yes is a yes.
+    ///
+    /// One look, no waiting. Somebody who wants to wait asks again next tick.
+    /// </summary>
+    public static bool ControlIsDown()
+    {
+        try
+        {
+            if ((GetAsyncKeyState(VkControl) & 0x8000) != 0)
+                return true;
+
+            return Input.IsKeyDown(Keys.LControlKey);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Presses the modifiers a gesture asked for, and only those.
+    ///
+    /// Only those is the change. The old Send pressed control whenever anything at all was wanted,
+    /// so a shift-only click would have gone out as ctrl+shift. Nothing ever noticed, because
+    /// nothing asks for shift without ctrl - the one caller passes ctrl: true, shift: wanted - but
+    /// the pointer's own modifier list has always been right about this, and leaving the two to
+    /// disagree is a trap laid for whoever first wants a plain shift-click.
+    /// </summary>
+    public static void Hold(bool ctrl, bool shift)
+    {
+        try
+        {
+            if (shift)
+                Input.KeyDown(Keys.LShiftKey);
+
+            if (ctrl)
+                Input.KeyDown(Keys.LControlKey);
+        }
+        catch
+        {
+            // Nothing useful to do about it here. The confirmation is what decides whether a click
+            // goes out, and it refuses on its own if this did not take.
+        }
+    }
+
+    /// <summary>
+    /// Sends a click and nothing else, for a caller already holding whatever it needs held.
+    ///
+    /// Nothing here releases anything, because the caller decides when the modifier comes up.
+    /// </summary>
+    public static void Press(bool right)
+    {
+        if (right)
+        {
+            Input.RightDown();
+            Input.RightUp();
+        }
+        else
+        {
+            Input.LeftDown();
+            Input.LeftUp();
+        }
+    }
 
     /// <summary>
     /// Lets go of control, whatever happened.
@@ -155,61 +146,8 @@ internal static class Buttons
         }
     }
 
-    /// <summary>
-    /// Whether control reads as held, asked both ways it might be visible.
-    ///
-    /// The Windows async state first, since that is where an injected key lands if it was injected
-    /// at all, and the game's own view second. Either answering yes is a yes.
-    ///
-    /// Waits only briefly, and only while there is a chance of an answer: once it is known that
-    /// neither can see it, the poll is pointless and the wait is pure delay on every click.
-    /// </summary>
-    private static bool Confirmed()
-    {
-        var until = _readable == false ? 0 : ConfirmMs;
-        var since = Stopwatch.StartNew();
-
-        do
-        {
-            try
-            {
-                if ((GetAsyncKeyState(VkControl) & 0x8000) != 0)
-                    return true;
-
-                if (Input.IsKeyDown(Keys.LControlKey))
-                    return true;
-            }
-            catch
-            {
-                return false;
-            }
-
-            if (until == 0)
-                break;
-
-            Thread.Sleep(PollMs);
-        }
-        while (since.ElapsedMilliseconds < until);
-
-        return false;
-    }
-
     private const int VkControl = 0x11;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int key);
-
-    private static void Click(bool right)
-    {
-        if (right)
-        {
-            Input.RightDown();
-            Input.RightUp();
-        }
-        else
-        {
-            Input.LeftDown();
-            Input.LeftUp();
-        }
-    }
 }

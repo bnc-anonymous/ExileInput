@@ -32,6 +32,7 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     private readonly Lease _lease = new();
     private readonly Dictionary<string, MousePointer> _pointers = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HeldKeys> _keys = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Stroke> _strokes = new(StringComparer.OrdinalIgnoreCase);
 
     public override bool Initialise()
     {
@@ -171,21 +172,39 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         //
         // So it fails closed now. Anything short of "the key is down and we can see it" goes the
         // long way, which confirms or refuses rather than assuming.
-        if (Gesture.StraightIn(ctrl, shift, pointer.ModifiersReady, Buttons.ControlIsDown))
-        {
-            Buttons.Press(right);
-            KeysFor(who).ReleaseAll();
-            Buttons.Release();
-            pointer.ModifiersLetGo();
-            return true;
-        }
+        var stroke = StrokeFor(who);
+        stroke.HoldMs = Settings.ModifierHoldMs.Value;
 
-        // Whatever the journey may have pressed comes up first, or Send would press control on top
-        // of a control already down and release it once at the end - leaving the second one held.
+        if (Gesture.StraightIn(ctrl, shift, pointer.ModifiersReady, Buttons.ControlIsDown))
+            return stroke.StraightIn(right);
+
+        // Whatever the journey may have pressed comes up first, or the stroke presses control on
+        // top of a control already down and releases it once at the end - leaving the second held.
         KeysFor(who).ReleaseAll();
         pointer.ModifiersLetGo();
 
-        return Buttons.Send(ctrl, right, Settings.ModifierHoldMs.Value, shift);
+        return stroke.Push(ctrl, shift, right);
+    }
+
+    /// <summary>The gesture in progress for a caller, made on first use like everything else here.</summary>
+    private Stroke StrokeFor(string who)
+    {
+        if (!_strokes.TryGetValue(who, out var stroke))
+        {
+            _strokes[who] = stroke = new Stroke
+            {
+                // The keys coming up is the end of the gesture, so it is also the moment the rest
+                // of the bookkeeping about them stops being true. Wired here rather than inside
+                // the stroke because a stroke that reached into the pointer would be two things.
+                OnLetGo = () =>
+                {
+                    KeysFor(who).ReleaseAll();
+                    PointerFor(who).ModifiersLetGo();
+                },
+            };
+        }
+
+        return stroke;
     }
 
     private bool Tap(string who, Keys key)
@@ -250,7 +269,14 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         // the plugin exists rather than a library: a passive helper would need every consumer to
         // remember to step its own movement, and the one that forgot would simply never arrive.
         if (_lease.Holder is { } driving)
+        {
             PointerFor(driving).Step();
+
+            // And the gesture, which is the half of the tick that used to be a Thread.Sleep. A
+            // modifier held around a click comes up here, a frame or four after it went down,
+            // rather than by stopping the overlay until it was time.
+            StrokeFor(driving).Step();
+        }
 
         // A claim that has gone stale is one whose owner is not coming back, so whatever it was
         // holding comes up with it. Asked here rather than inside the lease because releasing keys
@@ -258,6 +284,9 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         // things at once.
         if (_lease.Holder == null && _held != null)
         {
+            // Whatever was mid-gesture is not going to finish, so it is dropped rather than left
+            // holding a modifier that turns the player's next click into something else.
+            StrokeFor(_held).Abandon();
             KeysFor(_held).ReleaseAll();
             Buttons.Release();
             _held = null;
@@ -275,6 +304,9 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
 
     public override void OnUnload()
     {
+        foreach (var stroke in _strokes.Values)
+            stroke.Abandon();
+
         foreach (var keys in _keys.Values)
             keys.ReleaseAll();
 
