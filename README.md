@@ -23,7 +23,7 @@ ctrl+right click that loses its modifier is not a click that fails quietly: on a
 the orb, putting it on the cursor where it blocks every click after it. So the key state is read
 before pressing, with a timed hold as the fallback where the state cannot be read at all.
 
-**`Pointer`** — where the cursor is being sent and whether it has got there. Client space
+**`MousePointer`** — where the cursor is being sent and whether it has got there. Client space
 throughout; the window origin is added in exactly one place. Instance per state machine, because
 the arrival tolerance that suits a stash tab is not the one that suits an inventory cell.
 

@@ -23,12 +23,12 @@ namespace ExileInput;
 /// screen, which fullscreen guarantees and windowed play does not. Nobody noticed because nobody
 /// plays windowed.
 /// </summary>
-public sealed class Pointer
+public sealed class MousePointer
 {
     private readonly GameController _gc;
     private readonly Random _rng;
 
-    public Pointer(GameController gc, Random rng = null)
+    public MousePointer(GameController gc, Random rng = null)
     {
         _gc = gc;
         _rng = rng ?? new Random();

@@ -29,7 +29,7 @@ namespace ExileInput;
 /// Note what this costs: <see cref="Send"/> blocks its caller for the confirmation poll and the
 /// holds either side of the press, which on a bad reading is the better part of half a second on
 /// the render thread. That is the price of doing the whole gesture at the destination. Holding the
-/// modifier across the approach instead removes it, and is what <see cref="Pointer"/> exists to
+/// modifier across the approach instead removes it, and is what <see cref="MousePointer"/> exists to
 /// make possible.
 /// </summary>
 public static class Buttons
