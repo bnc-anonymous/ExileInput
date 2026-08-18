@@ -9,16 +9,7 @@
     <PathMap>$(MSBuildProjectDirectory)=$(MSBuildProjectName)</PathMap>
     <EmbedAllSources>true</EmbedAllSources>
 
-    <!--
-      Built straight into the HUD root, beside ItemFilterLibrary, which is the precedent for a
-      library several plugins share. A plugin references it the same way it references ExileCore -
-      by absolute path off exapiPackage, with Private false so the plugin does not carry its own
-      copy. Two copies of this loaded at once would each keep their own held-key state, which is
-      the one thing it must not do.
-    -->
-    <OutputPath>$(exapiPackage)\</OutputPath>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <!--Don't bother setting anything to do with the output path, HUD will do it for you if you put the source code inside Plugins/Source-->
   </PropertyGroup>
 
   <ItemGroup>
@@ -33,6 +24,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="ImGui.NET" Version="1.90.0.1" />
     <PackageReference Include="SharpDX.Mathematics" Version="4.2.0" />
   </ItemGroup>
+  <ItemGroup>
+    <!--
+      Not compiled in. Client/ExileInputClient.cs is the file a consuming plugin copies into its
+      own source, and it speaks only to the bridge - so it has no business being part of this
+      assembly, where it would just be dead code talking to itself.
+    -->
+    <Compile Remove="Client\**" />
+    <None Include="Client\**" />
+  </ItemGroup>
+
 </Project>

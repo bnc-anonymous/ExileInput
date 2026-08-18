@@ -32,7 +32,7 @@ namespace ExileInput;
 /// modifier across the approach instead removes it, and is what <see cref="MousePointer"/> exists to
 /// make possible.
 /// </summary>
-public static class Buttons
+internal static class Buttons
 {
     /// <summary>How long to wait for the game to agree the modifier is held.</summary>
     private const int ConfirmMs = 200;

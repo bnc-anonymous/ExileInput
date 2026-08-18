@@ -20,7 +20,7 @@ namespace ExileInput;
 /// deliberately holding. <see cref="ReleaseEverything"/> is the exception, for a plugin shutting
 /// down or a stop key, where letting go of too much is the safe direction.
 /// </summary>
-public sealed class HeldKeys
+internal sealed class HeldKeys
 {
     private readonly HashSet<Keys> _down = [];
 

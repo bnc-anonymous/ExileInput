@@ -1,51 +1,69 @@
 # ExileInput
 
-One place for the input a plugin sends to Path of Exile, so several plugins do not each keep their
-own copy of the same hard-won details.
+One owner for the mouse and keyboard, shared by every plugin that wants them.
 
-Built as a plain library into the ExileApi root, beside `ItemFilterLibrary.dll`, and referenced the
-same way `ExileCore` is:
+Install it with **PluginUpdater** — paste this repository's URL into its Add tab. The csproj sits at
+the repo root, which is where ExileAPI looks once the clone lands in `Plugins/Source`.
 
-```xml
-<Reference Include="ExileInput">
-  <HintPath>$(exapiPackage)\ExileInput.dll</HintPath>
-  <Private>False</Private>
-</Reference>
+## Integrating
+
+There is nothing to reference. Copy **`Client/ExileInputClient.cs`** into your own source, change
+the namespace, and give it a name unique to your plugin:
+
+```csharp
+_input = new ExileInputClient(GameController, "MyPlugin");
+
+if (!_input.Take())              // somebody else has the cursor; try again next tick
+    return;
+
+_input.MoveTo(button.GetClientRectCache);
+// ... on a later tick, once the game has caught up ...
+if (_input.Arrived())
+    _input.Click(ctrl: true, right: true);
+// ... when your machine finishes or gives up ...
+_input.Release();
 ```
 
-`Private` false matters. Two copies loaded at once would each keep their own record of which keys
-are held, and the whole point of `HeldKeys` is that there is one.
+## Why nothing is shared but a file
 
-## What is here
+Everything crossing the bridge is a type both sides already have — `RectangleF`, `Vector2`, `Keys`,
+`bool`, `float`. So there is no DLL in the HUD root, no version to keep in step, and no cast to fail
+at load. An interface would have meant all three.
 
-**`Buttons`** — a click, with a modifier confirmed down before it is sent. This exists because a
-ctrl+right click that loses its modifier is not a click that fails quietly: on a Chaos Orb it *uses*
-the orb, putting it on the cursor where it blocks every click after it. So the key state is read
-before pressing, with a timed hold as the fallback where the state cannot be read at all.
+If this plugin is not installed, `Available` is false and every call returns false, so a consumer can
+fall back to driving `ExileCore.Input` itself. Nothing here is load-bearing for anyone.
 
-**`MousePointer`** — where the cursor is being sent and whether it has got there. Client space
-throughout; the window origin is added in exactly one place. Instance per state machine, because
-the arrival tolerance that suits a stash tab is not the one that suits an inventory cell.
+## One at a time
 
-**`HeldKeys`** — what this plugin is holding down, so all of it can be let go. A control left down
-turns the player's next click into a ctrl+click, which in a stash moves items.
+There is one cursor and there may be several plugins. Two driving it at once does not degrade
+gracefully — it produces a click at the average of two intentions, which lands on neither and looks
+exactly like a misread rect.
 
-## Why it was pulled out
+So every call names its caller, and that name is the claim. Calls from anyone else are refused
+rather than queued: callers already cope with a click that did not go through, and none of them cope
+with one that happened later than they thought.
 
-The currency flipper had five state machines each moving a cursor and clicking. Consolidating them
-surfaced two things that a single copy could not have hidden:
+**The claim expires.** A plugin that throws mid-gesture, gets disabled, or is reloaded never reaches
+its release — and without an expiry that is the cursor gone for the session, with no error anywhere,
+just every other plugin quietly doing nothing. Five seconds by default: far longer than a move or a
+click, far shorter than a session.
 
-- **Three of the five added the window origin before `SetCursorPos` and two did not.** All five then
-  compared against the game's client-space cursor, so the comparisons agreed while the moves did
-  not. The two that skipped it aim correctly only while the game window sits at the top left of the
-  screen. Fullscreen guarantees that; windowed play does not.
-- **A guard against clicking through an overlay existed in one machine only.** Two others reach into
-  the same inventory underneath the same panel and had no such check.
+## What it knows that a fresh implementation would not
 
-Neither is the kind of thing that gets noticed while the rule lives in five places.
+- **A ctrl+right click that loses its modifier does not fail quietly.** On a Chaos Orb it *uses* the
+  orb, putting it on the cursor where it blocks every click after it. So the key state is read before
+  pressing, with a timed hold as the fallback where the state cannot be read at all.
+- **`SetCursorPos` takes screen coordinates; elements report client ones.** Getting that wrong is
+  invisible in fullscreen and wrong by the window offset everywhere else. The translation happens in
+  one place here.
+- **A click sent in the same breath as the move lands where the cursor used to be.** The game reports
+  its position a frame or two late, so arrival is confirmed before pressing.
+- **A key held and forgotten costs more than a failed action.** Control left down turns the player's
+  next click into a ctrl+click, which in a stash moves items. Every key is tracked and released
+  together.
 
 ## Status
 
-Consolidation of the existing behaviour. Movement is still a single `SetCursorPos` - the cursor
-arrives instantly and the caller waits for the game to agree. Interpolated travel, with modifiers
-held across the approach rather than pressed on arrival, is the next piece.
+Consolidation. Movement is still a single `SetCursorPos` — the cursor arrives instantly and the
+caller waits for the game to agree. Interpolated travel, with modifiers held across the approach
+rather than pressed on arrival, is the next piece.
