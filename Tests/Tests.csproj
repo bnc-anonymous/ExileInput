@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A console runner rather than a test framework, matching the flipper's Tests project - the
+    useful output is the whole table side by side, and a framework reports the first failure and
+    hides the rest.
+
+    Unlike that one, this sits inside the plugin folder rather than beside it. The plugin csproj has
+    to be at the top of the repository for PluginUpdater to clone and build it, so the repository
+    root *is* the plugin folder and there is no "beside it" to use. ExileInput.csproj therefore
+    removes Tests\** from its compile, or the HUD would build a console Main into a plugin library.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>ExileInputTests</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ExileInput.csproj" />
+  </ItemGroup>
+
+</Project>

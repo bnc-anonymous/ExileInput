@@ -85,6 +85,9 @@ internal sealed class MousePointer
     /// <summary>Whether a move has been asked for and not yet confirmed.</summary>
     public bool Awaiting { get; private set; }
 
+    /// <summary>How far off the target a landing may be and still count, for the current move.</summary>
+    internal float Accepts => Math.Min(TolerancePx, _bound);
+
     /// <summary>
     /// A point to aim at inside a rect, spread about its centre.
     ///
@@ -92,14 +95,30 @@ internal sealed class MousePointer
     /// point stays off the boundary, where a rect that is a pixel generous starts landing outside
     /// the thing it describes.
     /// </summary>
-    public Vector2 PointIn(RectangleF rect)
+    public Vector2 PointIn(RectangleF rect) => PointIn(rect, SpreadPercent, _rng);
+
+    /// <summary>The same, without needing a pointer or a game to ask it.</summary>
+    internal static Vector2 PointIn(RectangleF rect, float spreadPercent, Random rng)
     {
-        var spread = Math.Clamp(SpreadPercent, 0f, 95f) / 100f;
+        var spread = Math.Clamp(spreadPercent, 0f, 95f) / 100f;
 
         return new Vector2(
-            rect.X + rect.Width * (0.5f + (float)(_rng.NextDouble() - 0.5) * spread),
-            rect.Y + rect.Height * (0.5f + (float)(_rng.NextDouble() - 0.5) * spread));
+            rect.X + rect.Width * (0.5f + (float)(rng.NextDouble() - 0.5) * spread),
+            rect.Y + rect.Height * (0.5f + (float)(rng.NextDouble() - 0.5) * spread));
     }
+
+    /// <summary>
+    /// How far a point sits from the nearest edge of the rect it was chosen inside.
+    ///
+    /// The whole of the rect bound, in one place with nothing else in it, because the arithmetic
+    /// is the part that can be wrong. Taking the minimum across both axes and not each separately
+    /// is the bit worth pinning: a tolerance is a radius, so a wide short row has to bind on its
+    /// height or a landing within tolerance sideways is still out of the row vertically.
+    /// </summary>
+    internal static float BoundFor(RectangleF rect, Vector2 target) =>
+        Math.Max(TightestPx, Math.Min(
+            Math.Min(target.X - rect.Left, rect.Right - target.X),
+            Math.Min(target.Y - rect.Top, rect.Bottom - target.Y)));
 
     /// <summary>
     /// How near the target must be reached when the target came from a rect - never further than
@@ -126,7 +145,7 @@ internal sealed class MousePointer
     /// ever rounds its readback that is a move that can never arrive - the caller waits out its
     /// timeout and stops, which is a worse outcome than the loose click this is here to prevent.
     /// </summary>
-    private const float TightestPx = 3f;
+    internal const float TightestPx = 3f;
 
     /// <summary>Picks a point inside the rect, sends the cursor there, and returns the point.</summary>
     public Vector2 Aim(RectangleF rect)
@@ -136,9 +155,7 @@ internal sealed class MousePointer
         Place(target);
 
         // After Place, which resets it: the bound belongs to this target, not the last one.
-        _bound = Math.Max(TightestPx, Math.Min(
-            Math.Min(target.X - rect.Left, rect.Right - target.X),
-            Math.Min(target.Y - rect.Top, rect.Bottom - target.Y)));
+        _bound = BoundFor(rect, target);
 
         return target;
     }
@@ -257,7 +274,7 @@ internal sealed class MousePointer
         if (_travel != null)
             return false;
 
-        if (Drift() > Math.Min(TolerancePx, _bound))
+        if (Drift() > Accepts)
             return false;
 
         Awaiting = false;

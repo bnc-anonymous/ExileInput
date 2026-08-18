@@ -23,6 +23,18 @@
     </Reference>
   </ItemGroup>
 
+  <!--
+    The tests reach the internals rather than the internals being made public for them. What is
+    worth checking here - a journey, a lease, the arithmetic that bounds a landing - is all detail
+    behind a bridge whose surface is deliberately small, and widening that surface so a test can
+    see it would be letting the test design the plugin.
+  -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ExileInputTests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="ImGui.NET" Version="1.90.0.1" />
     <PackageReference Include="SharpDX.Mathematics" Version="4.2.0" />
@@ -35,6 +47,14 @@
     -->
     <Compile Remove="Client\**" />
     <None Include="Client\**" />
+
+    <!--
+      The tests, likewise. They are a console program with a Main and they reference this project,
+      so compiling them into it would be both a circular reference and an entry point in a library.
+      The HUD builds whatever csproj it finds at the top of the plugin folder, which is this one.
+    -->
+    <Compile Remove="Tests\**" />
+    <None Include="Tests\**" />
   </ItemGroup>
 
 </Project>

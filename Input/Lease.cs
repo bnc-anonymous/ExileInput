@@ -17,8 +17,32 @@ namespace ExileInput;
 /// </summary>
 public sealed class Lease
 {
-    private readonly Stopwatch _since = new();
+    /// <summary>A monotonic reading shared by every lease, and never a wall clock.</summary>
+    private static readonly Stopwatch Clock = Stopwatch.StartNew();
+
     private string _holder;
+
+    /// <summary>When the holder last did anything, by the reading below.</summary>
+    private TimeSpan _acted;
+
+    /// <summary>
+    /// What time it is, for driving the clock by hand.
+    ///
+    /// The expiry is the one rule here that cannot be checked by using the class normally - the
+    /// alternative to injecting time is a test that sleeps for five seconds, which nobody runs
+    /// twice.
+    ///
+    /// A reading of the current time and not a measure of how long the holder has been idle, which
+    /// is what the first version of this handed over. That seam could not express the rule it
+    /// existed to check: refreshing the lease has to reset the idle time, and a test driving the
+    /// idle time directly has already decided the answer. It reported a working lease as broken
+    /// twice, which is the right way round for a bad seam to fail but still cost the time.
+    /// </summary>
+    internal Func<TimeSpan> Now { get; set; }
+
+    private TimeSpan Reading => Now?.Invoke() ?? Clock.Elapsed;
+
+    private TimeSpan Since => Reading - _acted;
 
     /// <summary>
     /// How long a holder may go without calling anything before the lease is taken off it.
@@ -37,7 +61,7 @@ public sealed class Lease
     /// <summary>Who holds it, or null when it is free.</summary>
     public string Holder => Stale ? null : _holder;
 
-    private bool Stale => _holder != null && _since.Elapsed > Expiry;
+    private bool Stale => _holder != null && Since > Expiry;
 
     /// <summary>
     /// Claims the cursor, or says no.
@@ -55,7 +79,7 @@ public sealed class Lease
             return false;
 
         _holder = who;
-        _since.Restart();
+        _acted = Reading;
         return true;
     }
 
@@ -65,7 +89,7 @@ public sealed class Lease
         if (string.IsNullOrWhiteSpace(who) || Holder != who)
             return false;
 
-        _since.Restart();
+        _acted = Reading;
         return true;
     }
 
@@ -81,13 +105,13 @@ public sealed class Lease
             return;
 
         _holder = null;
-        _since.Reset();
+        _acted = default;
     }
 
     /// <summary>Takes it off whoever has it, for a stop key or the plugin unloading.</summary>
     public void Break()
     {
         _holder = null;
-        _since.Reset();
+        _acted = default;
     }
 }

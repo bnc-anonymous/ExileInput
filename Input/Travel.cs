@@ -59,15 +59,30 @@ internal sealed class Travel
         }
     }
 
+    /// <summary>How long this journey was given, in milliseconds.</summary>
+    public float Ms => _ms;
+
     /// <summary>How far through the journey, from nought to one.</summary>
-    public float Progress => Math.Clamp((float)_since.Elapsed.TotalMilliseconds / _ms, 0f, 1f);
+    public float Progress => ProgressAt((float)_since.Elapsed.TotalMilliseconds);
 
     public bool Done => Progress >= 1f;
 
+    /// <summary>How far through the journey a given elapsed time is.</summary>
+    public float ProgressAt(float ms) => Math.Clamp(ms / _ms, 0f, 1f);
+
     /// <summary>Where the cursor should be this instant.</summary>
-    public Vector2 Now()
+    public Vector2 Now() => At(Progress);
+
+    /// <summary>
+    /// Where the cursor should be a given fraction of the way through.
+    ///
+    /// Split out from Now so the path can be examined without waiting for it. A journey is the one
+    /// thing here that cannot be checked by looking at it - it is a few hundred milliseconds of
+    /// cursor somewhere off screen - so the alternative to driving it by hand is not testing it.
+    /// </summary>
+    public Vector2 At(float t)
     {
-        var t = Progress;
+        t = Math.Clamp(t, 0f, 1f);
 
         // Smoothstep: still at both ends, quickest in the middle.
         var eased = t * t * (3f - 2f * t);

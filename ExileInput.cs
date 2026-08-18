@@ -171,7 +171,7 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         //
         // So it fails closed now. Anything short of "the key is down and we can see it" goes the
         // long way, which confirms or refuses rather than assuming.
-        if ((ctrl || shift) && pointer.ModifiersReady && (!ctrl || Buttons.ControlIsDown()))
+        if (Gesture.StraightIn(ctrl, shift, pointer.ModifiersReady, Buttons.ControlIsDown))
         {
             Buttons.Press(right);
             KeysFor(who).ReleaseAll();
