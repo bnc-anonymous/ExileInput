@@ -67,8 +67,17 @@ internal sealed class MousePointer
     /// <summary>Told when the journey presses its modifier, so somebody can release it later.</summary>
     public Action<Keys> OnModifier { get; set; }
 
-    /// <summary>Whether the modifiers asked for at the last move are down.</summary>
+    /// <summary>
+    /// Whether the modifiers this journey pressed are still down.
+    ///
+    /// Must be told when they are let go, or it goes on saying yes to a click that has none - which
+    /// is a bare click, and a bare right click on a currency item uses it rather than moving it.
+    /// It said yes for the whole session once, because pressing set it and nothing cleared it.
+    /// </summary>
     public bool ModifiersReady => _modifiersDown;
+
+    /// <summary>Told that whatever the journey pressed has been released.</summary>
+    public void ModifiersLetGo() => _modifiersDown = false;
 
     /// <summary>Where the cursor was last sent, in client space.</summary>
     public Vector2 Expected { get; private set; }
@@ -225,5 +234,6 @@ internal sealed class MousePointer
     {
         Awaiting = false;
         _travel = null;
+        _modifiersDown = false;
     }
 }

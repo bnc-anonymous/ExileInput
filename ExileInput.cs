@@ -155,20 +155,35 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         if (!_lease.Held(who))
             return false;
 
-        // Where the approach pressed the modifier, it has had the whole journey to register and is
-        // still held - so the press goes straight in and the keys come up after. That is the point
-        // of pressing it in flight: the confirmation poll happens while the cursor is moving rather
-        // than while it sits on the target.
-        if ((ctrl || shift) && PointerFor(who).ModifiersReady)
-        {
-            if (ctrl && !Buttons.ControlIsDown() && Buttons.Readable == true)
-                return false;
+        var pointer = PointerFor(who);
 
+        // Where the approach pressed the modifier and it is still verifiably down, the press goes
+        // straight in: it has had the whole journey to register, so there is nothing left to wait
+        // for. That is the point of pressing it in flight.
+        //
+        // Both halves of that condition matter, and the first version had neither right. It asked
+        // the pointer whether it had pressed anything - which stayed true after the keys were
+        // released, so a later click with no move in between took this path with nothing held - and
+        // it guarded that with "Readable == true", which is null until Buttons.Send has run at
+        // least once. Take the fast path from the start and Send never runs, so the guard never
+        // fires. The result was a bare left click on Faustus, which is the exact thing all of this
+        // exists to prevent.
+        //
+        // So it fails closed now. Anything short of "the key is down and we can see it" goes the
+        // long way, which confirms or refuses rather than assuming.
+        if ((ctrl || shift) && pointer.ModifiersReady && (!ctrl || Buttons.ControlIsDown()))
+        {
             Buttons.Press(right);
             KeysFor(who).ReleaseAll();
             Buttons.Release();
+            pointer.ModifiersLetGo();
             return true;
         }
+
+        // Whatever the journey may have pressed comes up first, or Send would press control on top
+        // of a control already down and release it once at the end - leaving the second one held.
+        KeysFor(who).ReleaseAll();
+        pointer.ModifiersLetGo();
 
         return Buttons.Send(ctrl, right, Settings.ModifierHoldMs.Value, shift);
     }
