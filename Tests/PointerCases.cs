@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using RectangleF = SharpDX.RectangleF;
 using Vector2 = System.Numerics.Vector2;
 
@@ -167,7 +168,59 @@ internal static class PointerCases
             Console.WriteLine();
         }
 
-        Console.WriteLine($"{All.Length - failed}/{All.Length} match");
+        // Aiming at the same rect twice, which is what a retry is. The first go may stay put; the
+        // second must not, because a caller only asks again when the first did not work.
+        var spot = new Vector2(1100f, 320f);
+        var moves = new List<int>();
+        var clock = TimeSpan.Zero;
+
+        var again = new MousePointer(null, new Random(20260818))
+        {
+            Cursor = () => spot,
+            Send = to => spot = to,
+            Clock = () => clock,
+            StayPut = true,
+            TolerancePx = 40,
+            SpreadPercent = 50f,
+            MinTravelMs = 60f,
+            TravelMsPerRootPx = 8f,
+            ArcPercent = 15f,
+        };
+
+        for (var go = 0; go < 3; go++)
+        {
+            var before = spot;
+
+            again.Aim(Row);
+
+            for (var i = 0; i < 200 && !again.Arrived(); i++)
+            {
+                again.Step();
+                clock += TimeSpan.FromMilliseconds(16);
+            }
+
+            moves.Add(Vector2.Distance(before, spot) > 0.5f ? 1 : 0);
+        }
+
+        // Stayed the first time, moved every time after.
+        var retryOk = moves.Count == 3 && moves[0] == 0 && moves[1] == 1 && moves[2] == 1;
+
+        if (!retryOk)
+            failed++;
+
+        Console.WriteLine($"{(retryOk ? "  ok  " : "FAIL  ")}7  Aiming at the same rect again always moves");
+        Console.WriteLine("        given the cursor already on the row, aimed at it three times running");
+        Console.WriteLine("        want  stay, then move, then move");
+        Console.WriteLine($"        got   {string.Join(", ", moves.Select(m => m == 0 ? "stay" : "move"))}");
+        Console.WriteLine("        why   a caller that aims at the same rect twice is one whose first go did not");
+        Console.WriteLine("              work, and the answer to that cannot be to do nothing again. The collector");
+        Console.WriteLine("              asks whether the show-stash button is lit before pressing it, since a");
+        Console.WriteLine("              press that misses walks the character out of the hideout - and when it");
+        Console.WriteLine("              was not lit, aiming again moved nothing and tested the same pixel. Four");
+        Console.WriteLine("              tries, then the whole thing again, for twenty seconds");
+        Console.WriteLine();
+
+        Console.WriteLine($"{All.Length + 1 - failed}/{All.Length + 1} match");
         return failed;
     }
 }

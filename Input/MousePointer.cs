@@ -192,15 +192,39 @@ internal sealed class MousePointer
     /// The one way a rect is aimed at. It used not to be - Move picked its own point and called
     /// Place, so this was dead code and the bound it sets was never applied to anything.
     /// </summary>
+    /// <summary>The rect this has already spent its one stay-put on.</summary>
+    private RectangleF? _stayedAt;
+
+    private static bool Near(RectangleF a, RectangleF b) =>
+        Math.Abs(a.X - b.X) < 1f && Math.Abs(a.Y - b.Y) < 1f &&
+        Math.Abs(a.Width - b.Width) < 1f && Math.Abs(a.Height - b.Height) < 1f;
+
     public Vector2 Aim(RectangleF rect, params Keys[] modifiers)
     {
         var here = Where();
 
+        // At most one stay-put per target, and then only until something else is aimed at.
+        //
+        // Because a caller that aims at the same rect twice is a caller whose first go did not
+        // work, and the answer to that cannot be to do nothing again. The collector asks the game
+        // whether the show-stash button is lit before pressing it - a press that misses that panel
+        // walks the character out of the hideout - and when it is not lit it aims again. With the
+        // cursor already inside the rect that second aim moved nothing, tested the same pixel, and
+        // failed for the same reason, four times, then gave up and started over. Twenty seconds of
+        // warnings without the cursor moving once.
+        //
+        // Staying put is for a hand already resting where it means to click. It is not an argument
+        // for staying somewhere that has just been shown not to work.
+        if (_stayedAt is not { } last || !Near(last, rect))
+            _stayedAt = null;
+
         // Already on it: keep the cursor where it is and treat that as the arrival. Expected has
         // to be the actual position rather than the middle of the rect, or the drift check spends
         // its timeout measuring the distance to a place nothing intends to go.
-        if (StayPut && Holds(rect, here))
+        if (StayPut && _stayedAt == null && Holds(rect, here))
         {
+            _stayedAt = rect;
+
             Expected = here;
             Awaiting = true;
             _travel = null;
