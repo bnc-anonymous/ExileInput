@@ -42,8 +42,8 @@ public sealed class ExileInputClient
 
     private Func<string, bool> _take;
     private Func<string, bool> _release;
-    private Func<string, RectangleF, bool> _moveTo;
-    private Func<string, Vector2, bool> _moveToPoint;
+    private Func<string, RectangleF, bool, bool, bool> _moveTo;
+    private Func<string, Vector2, bool, bool, bool> _moveToPoint;
     private Func<string, bool> _arrived;
     private Func<string, float> _drift;
     private Func<string, bool> _aiming;
@@ -97,8 +97,8 @@ public sealed class ExileInputClient
 
             _take = b.GetMethod<Func<string, bool>>("ExileInput.Take");
             _release = b.GetMethod<Func<string, bool>>("ExileInput.Release");
-            _moveTo = b.GetMethod<Func<string, RectangleF, bool>>("ExileInput.MoveTo");
-            _moveToPoint = b.GetMethod<Func<string, Vector2, bool>>("ExileInput.MoveToPoint");
+            _moveTo = b.GetMethod<Func<string, RectangleF, bool, bool, bool>>("ExileInput.MoveTo");
+            _moveToPoint = b.GetMethod<Func<string, Vector2, bool, bool, bool>>("ExileInput.MoveToPoint");
             _arrived = b.GetMethod<Func<string, bool>>("ExileInput.Arrived");
             _drift = b.GetMethod<Func<string, float>>("ExileInput.Drift");
             _aiming = b.GetMethod<Func<string, bool>>("ExileInput.Aiming");
@@ -133,18 +133,25 @@ public sealed class ExileInputClient
         return _release?.Invoke(_me) ?? false;
     }
 
-    /// <summary>Sends the cursor to a spread point inside a rect.</summary>
-    public bool MoveTo(RectangleF rect)
+    /// <summary>
+    /// Sends the cursor to a spread point inside a rect.
+    ///
+    /// Say here what the click will need held, not at the click. The modifier then goes down
+    /// partway through the approach rather than on arrival, which is both what a hand does and the
+    /// faster of the two - the key gets the length of the journey to register, instead of the
+    /// pointer sitting on the target while it is confirmed.
+    /// </summary>
+    public bool MoveTo(RectangleF rect, bool ctrl = false, bool shift = false)
     {
         Look();
-        return _moveTo?.Invoke(_me, rect) ?? false;
+        return _moveTo?.Invoke(_me, rect, ctrl, shift) ?? false;
     }
 
     /// <summary>Sends the cursor to a client-space point.</summary>
-    public bool MoveTo(Vector2 client)
+    public bool MoveTo(Vector2 client, bool ctrl = false, bool shift = false)
     {
         Look();
-        return _moveToPoint?.Invoke(_me, client) ?? false;
+        return _moveToPoint?.Invoke(_me, client, ctrl, shift) ?? false;
     }
 
     /// <summary>Whether the cursor has reached where it was sent.</summary>

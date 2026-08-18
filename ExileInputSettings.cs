@@ -24,6 +24,28 @@ public class ExileInputSettings : ISettings
         "is most of a row.")]
     public RangeNode<int> TolerancePx { get; set; } = new RangeNode<int>(12, 1, 100);
 
+    [Menu("Shortest Move (ms)",
+        "The least time a move may take, however near the target.\n\n" +
+        "A teleport is not a fast movement, it is the absence of one, and it is the most obvious " +
+        "thing about automated input because a hand cannot do it.")]
+    public RangeNode<int> MinTravelMs { get; set; } = new RangeNode<int>(60, 0, 1000);
+
+    [Menu("Move Time Per Root Pixel (ms)",
+        "How much longer a move takes for being further, per square root of the distance.\n\n" +
+        "The square root and not the distance: a hand crossing the screen does not take ten times " +
+        "as long as one crossing a tenth of it, because reaching is mostly aiming and aiming costs " +
+        "about the same either way.\n\n" +
+        "Zero teleports, which is what this did before and is the setting to reach for when " +
+        "something is wrong and the question is whether the path is why.")]
+    public RangeNode<int> TravelMsPerRootPx { get; set; } = new RangeNode<int>(8, 0, 60);
+
+    [Menu("Path Bow (%)",
+        "How far the path curves off the straight line, as a percentage of its length.\n\n" +
+        "A wrist and an elbow rotate, so a hand travels an arc; only a mouse dragged along a ruler " +
+        "goes straight. The direction is chosen per move, so two journeys between the same two " +
+        "points do not trace the same line.")]
+    public RangeNode<int> ArcPercent { get; set; } = new RangeNode<int>(15, 0, 60);
+
     [Menu("Give Up Waiting After (ms)",
         "How long the cursor may fail to arrive before the caller is told it did not.")]
     public RangeNode<int> ArriveTimeoutMs { get; set; } = new RangeNode<int>(1500, 100, 10000);

@@ -44,8 +44,10 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         b.SaveMethod("ExileInput.Holder", () => _lease.Holder);
 
         // Aiming. A rect is what every caller has, since that is what an element reports.
-        b.SaveMethod("ExileInput.MoveTo", (string who, RectangleF rect) => Move(who, rect));
-        b.SaveMethod("ExileInput.MoveToPoint", (string who, Vector2 client) => MoveTo(who, client));
+        b.SaveMethod("ExileInput.MoveTo",
+            (string who, RectangleF rect, bool ctrl, bool shift) => Move(who, rect, ctrl, shift));
+        b.SaveMethod("ExileInput.MoveToPoint",
+            (string who, Vector2 client, bool ctrl, bool shift) => MoveTo(who, client, ctrl, shift));
         b.SaveMethod("ExileInput.Arrived", (string who) => Arrived(who));
         b.SaveMethod("ExileInput.Drift", (string who) => Drift(who));
         b.SaveMethod("ExileInput.Aiming", (string who) => Aiming(who));
@@ -76,6 +78,10 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
             _pointers[who] = pointer = new MousePointer(GameController);
 
         pointer.SpreadPercent = Settings.SpreadPercent.Value;
+        pointer.MinTravelMs = Settings.MinTravelMs.Value;
+        pointer.TravelMsPerRootPx = Settings.TravelMsPerRootPx.Value;
+        pointer.ArcPercent = Settings.ArcPercent.Value;
+        pointer.OnModifier ??= key => KeysFor(who).Hold(key);
         pointer.TolerancePx = _tolerances.TryGetValue(who, out var px) ? px : Settings.TolerancePx.Value;
         return pointer;
     }
@@ -88,22 +94,31 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         return keys;
     }
 
-    private bool Move(string who, RectangleF rect)
+    private bool Move(string who, RectangleF rect, bool ctrl, bool shift)
     {
         if (!_lease.Held(who))
             return false;
 
-        PointerFor(who).Aim(rect);
+        var pointer = PointerFor(who);
+        pointer.Place(pointer.PointIn(rect), Modifiers(ctrl, shift));
         return true;
     }
 
-    private bool MoveTo(string who, Vector2 client)
+    private bool MoveTo(string who, Vector2 client, bool ctrl, bool shift)
     {
         if (!_lease.Held(who))
             return false;
 
-        PointerFor(who).Place(client);
+        PointerFor(who).Place(client, Modifiers(ctrl, shift));
         return true;
+    }
+
+    private static Keys[] Modifiers(bool ctrl, bool shift)
+    {
+        if (ctrl && shift) return [Keys.LControlKey, Keys.LShiftKey];
+        if (ctrl) return [Keys.LControlKey];
+        if (shift) return [Keys.LShiftKey];
+        return [];
     }
 
     private bool Arrived(string who) => _lease.Held(who) && PointerFor(who).Arrived();
@@ -135,8 +150,28 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     /// <summary>What each caller asked for, since the shared default cannot suit every target.</summary>
     private readonly Dictionary<string, int> _tolerances = new(StringComparer.OrdinalIgnoreCase);
 
-    private bool Click(string who, bool ctrl, bool shift, bool right) =>
-        _lease.Held(who) && Buttons.Send(ctrl, right, Settings.ModifierHoldMs.Value, shift);
+    private bool Click(string who, bool ctrl, bool shift, bool right)
+    {
+        if (!_lease.Held(who))
+            return false;
+
+        // Where the approach pressed the modifier, it has had the whole journey to register and is
+        // still held - so the press goes straight in and the keys come up after. That is the point
+        // of pressing it in flight: the confirmation poll happens while the cursor is moving rather
+        // than while it sits on the target.
+        if ((ctrl || shift) && PointerFor(who).ModifiersReady)
+        {
+            if (ctrl && !Buttons.ControlIsDown() && Buttons.Readable == true)
+                return false;
+
+            Buttons.Press(right);
+            KeysFor(who).ReleaseAll();
+            Buttons.Release();
+            return true;
+        }
+
+        return Buttons.Send(ctrl, right, Settings.ModifierHoldMs.Value, shift);
+    }
 
     private bool Tap(string who, Keys key)
     {
@@ -195,6 +230,12 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     public override Job Tick()
     {
         _lease.Expiry = TimeSpan.FromSeconds(Settings.ClaimExpirySeconds.Value);
+
+        // The journey, advanced for whoever holds the cursor. One place doing this is the reason
+        // the plugin exists rather than a library: a passive helper would need every consumer to
+        // remember to step its own movement, and the one that forgot would simply never arrive.
+        if (_lease.Holder is { } driving)
+            PointerFor(driving).Step();
 
         // A claim that has gone stale is one whose owner is not coming back, so whatever it was
         // holding comes up with it. Asked here rather than inside the lease because releasing keys

@@ -1,5 +1,6 @@
 using ExileCore;
 using System;
+using System.Windows.Forms;
 using RectangleF = SharpDX.RectangleF;
 using Vector2 = System.Numerics.Vector2;
 
@@ -46,6 +47,29 @@ internal sealed class MousePointer
     /// <summary>How near the cursor must be to where it was sent before it counts as arrived.</summary>
     public int TolerancePx { get; set; } = 12;
 
+    /// <summary>The shortest a journey may take, however near the target.</summary>
+    public float MinTravelMs { get; set; } = 60f;
+
+    /// <summary>Milliseconds added per square root of a pixel travelled. Nought teleports.</summary>
+    public float TravelMsPerRootPx { get; set; } = 8f;
+
+    /// <summary>How far the path bows off the straight line, as a percentage of its length.</summary>
+    public float ArcPercent { get; set; } = 15f;
+
+    /// <summary>The journey in progress, or null when the cursor is where it was put.</summary>
+    private Travel _travel;
+
+    /// <summary>What to press partway through, and where.</summary>
+    private Keys[] _modifiers = [];
+    private float _modifierAt;
+    private bool _modifiersDown;
+
+    /// <summary>Told when the journey presses its modifier, so somebody can release it later.</summary>
+    public Action<Keys> OnModifier { get; set; }
+
+    /// <summary>Whether the modifiers asked for at the last move are down.</summary>
+    public bool ModifiersReady => _modifiersDown;
+
     /// <summary>Where the cursor was last sent, in client space.</summary>
     public Vector2 Expected { get; private set; }
 
@@ -83,14 +107,77 @@ internal sealed class MousePointer
     /// aiming at a point twice as far from the top left as it meant to, which on a 4K monitor is
     /// off the screen entirely.
     /// </summary>
-    public void Place(Vector2 client)
+    public void Place(Vector2 client, params Keys[] modifiers)
     {
-        var origin = _gc.Window.GetWindowRectangle().TopLeft;
-
-        Input.SetCursorPos(new Vector2(origin.X + client.X, origin.Y + client.Y));
-
         Expected = client;
         Awaiting = true;
+
+        _modifiers = modifiers ?? [];
+        _modifierAt = Travel.ModifierAt(_rng);
+        _modifiersDown = false;
+
+        // Nought means teleport, which is what this did before travel existed and is worth keeping
+        // - it is the setting to reach for when something is going wrong and the question is
+        // whether the path is why.
+        if (TravelMsPerRootPx <= 0)
+        {
+            _travel = null;
+            PressModifiers();
+            Put(client);
+            return;
+        }
+
+        _travel = new Travel(Where(), client, MinTravelMs, TravelMsPerRootPx, ArcPercent, _rng);
+    }
+
+    /// <summary>
+    /// Advances the journey. Called every tick by whoever owns this pointer.
+    ///
+    /// The modifier goes down partway rather than on arrival, which is the whole point of the
+    /// journey existing: it overlaps the press with the approach the way a hand does, and it gives
+    /// the key the length of the approach to register rather than making the pointer wait on the
+    /// target while it confirms.
+    /// </summary>
+    public void Step()
+    {
+        if (_travel == null)
+            return;
+
+        if (!_modifiersDown && _travel.Progress >= _modifierAt)
+            PressModifiers();
+
+        Put(_travel.Now());
+
+        if (_travel.Done)
+            _travel = null;
+    }
+
+    private void PressModifiers()
+    {
+        _modifiersDown = true;
+
+        foreach (var key in _modifiers)
+            OnModifier?.Invoke(key);
+    }
+
+    /// <summary>Where the cursor is now, in client space.</summary>
+    private Vector2 Where()
+    {
+        try
+        {
+            return new Vector2(_gc.IngameState.MousePosX, _gc.IngameState.MousePosY);
+        }
+        catch
+        {
+            return Expected;
+        }
+    }
+
+    /// <summary>The one place the window origin is added.</summary>
+    private void Put(Vector2 client)
+    {
+        var origin = _gc.Window.GetWindowRectangle().TopLeft;
+        Input.SetCursorPos(new Vector2(origin.X + client.X, origin.Y + client.Y));
     }
 
     /// <summary>How far the cursor is from where it was sent, in client-space pixels.</summary>
@@ -120,6 +207,12 @@ internal sealed class MousePointer
         if (!Awaiting)
             return true;
 
+        // Still travelling is not "did not arrive". The drift is large on purpose for as long as
+        // the journey is running, and a caller asking every tick would otherwise read its own
+        // movement as a failure to move.
+        if (_travel != null)
+            return false;
+
         if (Drift() > TolerancePx)
             return false;
 
@@ -128,5 +221,9 @@ internal sealed class MousePointer
     }
 
     /// <summary>Forgets any outstanding move, for a machine giving up on what it was doing.</summary>
-    public void Forget() => Awaiting = false;
+    public void Forget()
+    {
+        Awaiting = false;
+        _travel = null;
+    }
 }
