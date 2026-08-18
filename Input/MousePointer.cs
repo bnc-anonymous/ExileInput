@@ -101,11 +101,45 @@ internal sealed class MousePointer
             rect.Y + rect.Height * (0.5f + (float)(_rng.NextDouble() - 0.5) * spread));
     }
 
+    /// <summary>
+    /// How near the target must be reached when the target came from a rect - never further than
+    /// its own edge.
+    ///
+    /// A tolerance is a guess about how exactly the game reports its cursor, and it is set per
+    /// machine by whoever wrote that machine. Forty pixels was a reasonable guess for a stash tab
+    /// and a bad one for a currency exchange row, which is fifty-four pixels tall: a cursor forty
+    /// pixels from a point thirteen pixels inside the row is outside the row, and a click there
+    /// hits whatever is underneath. That is the click that missed the "I want" box.
+    ///
+    /// Rather than tuning eight numbers against the smallest thing each machine might click, bound
+    /// the tolerance by the rect being aimed at. Then within-tolerance implies inside-the-rect by
+    /// construction, and it stays true for whatever gets clicked next.
+    ///
+    /// float.MaxValue when the caller gave a bare point, because there is no rect to be inside of.
+    /// </summary>
+    private float _bound = float.MaxValue;
+
+    /// <summary>
+    /// The least the rect may tighten the tolerance to.
+    ///
+    /// A rect a few pixels tall would otherwise demand a landing exact to a pixel, and if the game
+    /// ever rounds its readback that is a move that can never arrive - the caller waits out its
+    /// timeout and stops, which is a worse outcome than the loose click this is here to prevent.
+    /// </summary>
+    private const float TightestPx = 3f;
+
     /// <summary>Picks a point inside the rect, sends the cursor there, and returns the point.</summary>
     public Vector2 Aim(RectangleF rect)
     {
         var target = PointIn(rect);
+
         Place(target);
+
+        // After Place, which resets it: the bound belongs to this target, not the last one.
+        _bound = Math.Max(TightestPx, Math.Min(
+            Math.Min(target.X - rect.Left, rect.Right - target.X),
+            Math.Min(target.Y - rect.Top, rect.Bottom - target.Y)));
+
         return target;
     }
 
@@ -120,6 +154,7 @@ internal sealed class MousePointer
     {
         Expected = client;
         Awaiting = true;
+        _bound = float.MaxValue;
 
         _modifiers = modifiers ?? [];
         _modifierAt = Travel.ModifierAt(_rng);
@@ -222,7 +257,7 @@ internal sealed class MousePointer
         if (_travel != null)
             return false;
 
-        if (Drift() > TolerancePx)
+        if (Drift() > Math.Min(TolerancePx, _bound))
             return false;
 
         Awaiting = false;
