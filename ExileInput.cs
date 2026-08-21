@@ -36,6 +36,19 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
 
     public override bool Initialise()
     {
+        // The last resort, for the ways out that never reach OnUnload.
+        //
+        // A lease going stale is covered, and so is the plugin being disabled or reloaded. What is
+        // not is the host dying: an unhandled exception taking the process down, or somebody
+        // closing it while a modifier is held. A key pressed with SendInput is operating system
+        // state and outlives the process that pressed it, so shift stays down afterwards - and
+        // every click the player makes then means something else.
+        //
+        // Neither handler can survive being killed outright, and nothing can. They cover the
+        // orderly and the semi-orderly, which is most of it.
+        AppDomain.CurrentDomain.ProcessExit += LetGoOfEverything;
+        AppDomain.CurrentDomain.UnhandledException += LetGoOfEverything;
+
         var b = GameController.PluginBridge;
 
         // Claiming. Take is safe to call every tick rather than once, so a caller need not keep a
@@ -328,8 +341,25 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     /// <summary>Who held the cursor last tick, so an expiry can be noticed and tidied after.</summary>
     private string _held;
 
+    /// <summary>Brings the modifiers up on the way out, whatever the way out turned out to be.</summary>
+    private static void LetGoOfEverything(object sender, EventArgs e)
+    {
+        try
+        {
+            HeldKeys.ReleaseEverything();
+        }
+        catch
+        {
+            // Nothing can be done about it from here, and throwing on the way out of a process
+            // helps nobody.
+        }
+    }
+
     public override void OnUnload()
     {
+        AppDomain.CurrentDomain.ProcessExit -= LetGoOfEverything;
+        AppDomain.CurrentDomain.UnhandledException -= LetGoOfEverything;
+
         foreach (var stroke in _strokes.Values)
             stroke.Abandon();
 

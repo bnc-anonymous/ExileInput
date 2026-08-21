@@ -84,12 +84,27 @@ internal sealed class HeldKeys
     ///
     /// Deliberately not confined to what this instance recorded. The case it exists for is the one
     /// where the record is wrong - a crash between the KeyDown and the bookkeeping, or a machine
-    /// disposed without unwinding - and there the honest move is to release the three that do
+    /// disposed without unwinding - and there the honest move is to release everything that does
     /// damage and not ask who owns them.
+    ///
+    /// Both the sided keys and the generic ones, because a caller may hold either and they are not
+    /// the same key to Windows. Hold(Keys.ShiftKey) presses VK_SHIFT; releasing VK_LSHIFT does not
+    /// reliably clear it. This list used to name the left-hand pair only, so a plugin holding shift
+    /// the generic way - which is what Keys.ShiftKey is - could survive the very sweep meant to
+    /// catch it, and alt was not on the list at all.
+    ///
+    /// A modifier left down after a crash is not a tidiness problem. It turns every click the
+    /// player makes afterwards into a different click, and in a stash that moves their things.
     /// </summary>
     public static void ReleaseEverything()
     {
-        foreach (var key in new[] { Keys.LControlKey, Keys.LShiftKey, Keys.Escape })
+        foreach (var key in new[]
+                 {
+                     Keys.ShiftKey, Keys.LShiftKey, Keys.RShiftKey,
+                     Keys.ControlKey, Keys.LControlKey, Keys.RControlKey,
+                     Keys.Menu, Keys.LMenu, Keys.RMenu,
+                     Keys.Escape,
+                 })
         {
             try
             {
