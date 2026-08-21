@@ -190,10 +190,24 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         if (Gesture.StraightIn(modifiers, pointer.ModifiersReady, Buttons.IsDown))
             return stroke.StraightIn(right);
 
-        // Whatever the journey may have pressed comes up first, or the stroke presses control on
-        // top of a control already down and releases it once at the end - leaving the second held.
-        KeysFor(who).ReleaseAll();
-        pointer.ModifiersLetGo();
+        // Whatever the JOURNEY pressed comes up first, or the stroke presses control on top of a
+        // control already down and releases it once at the end - leaving the second held.
+        //
+        // Gated on the journey having pressed something, and that gate is not a nicety. Without it
+        // this released every key the caller was holding deliberately, on every click, before
+        // sending it - and the caller's keys live in the same bag because Hold puts them there.
+        //
+        // For a caller holding shift to keep a currency selected between applications, that is the
+        // whole craft: shift came up, the selection ended with it, and the click that followed a
+        // microsecond later was a bare left click on the item being crafted. Which picks it up.
+        //
+        // A click asking for no modifiers has nothing to clean up unless the approach pressed
+        // something, and ModifiersReady is exactly the flag that says whether it did.
+        if (Gesture.ReleaseBeforePush(pointer.ModifiersReady))
+        {
+            KeysFor(who).ReleaseAll();
+            pointer.ModifiersLetGo();
+        }
 
         return stroke.Push(modifiers, right);
     }

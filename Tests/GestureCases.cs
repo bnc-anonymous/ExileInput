@@ -125,3 +125,59 @@ internal static class GestureCases
         return failed;
     }
 }
+
+/// <param name="Ready">Whether the approach pressed a modifier partway through the journey.</param>
+internal sealed record ReleaseCase(string Name, bool Ready, bool WantRelease, string Reason);
+
+/// <summary>
+/// Whether a caller's held keys come up before a click goes out.
+///
+/// The second line in this plugin with a known cost of being wrong, and it was wrong. There is one
+/// bag of held keys per caller, and both the modifier pressed in flight and a key the caller asked
+/// to hold go into it - so releasing the bag before every click let go of the caller's own keys
+/// too. A plugin holding shift to keep a currency selected between applications lost the selection
+/// on every click, and the bare click that followed picked up the item it was meant to be crafting.
+/// </summary>
+internal static class ReleaseCases
+{
+    internal static readonly ReleaseCase[] All =
+    [
+        new("1  A click after a journey that pressed something cleans it up", true, true,
+            "the case the line was written for. The approach pressed a modifier partway through " +
+            "the move and the stroke is about to press its own; without bringing the first up, the " +
+            "stroke releases once at the end and leaves the other down"),
+
+        new("2  A click after a journey that pressed nothing releases nothing", false, false,
+            "and this is the fix. Nothing was pressed in flight, so anything held belongs to the " +
+            "caller and was put there on purpose.\n\n" +
+            "        Holding shift is how a currency stays selected between applications. " +
+            "Releasing it here ended the selection a microsecond before the click, so the click " +
+            "reached the game bare - and a bare left click on an item picks it up"),
+    ];
+
+    public static int Run()
+    {
+        Console.WriteLine("== whether a caller's held keys come up before a click ==");
+
+        var failed = 0;
+
+        foreach (var c in All)
+        {
+            var got = Gesture.ReleaseBeforePush(c.Ready);
+            var ok = got == c.WantRelease;
+
+            Console.WriteLine($"  {(ok ? "ok " : "FAIL")} {c.Name}");
+            Console.WriteLine($"        doing  a click with the approach having pressed " +
+                              $"{(c.Ready ? "something" : "nothing")}");
+            Console.WriteLine($"        want   {(c.WantRelease ? "release first" : "release nothing")}");
+            Console.WriteLine($"        got    {(got ? "release first" : "release nothing")}");
+            Console.WriteLine($"        why    {c.Reason}");
+            Console.WriteLine();
+
+            if (!ok) failed++;
+        }
+
+        Console.WriteLine($"{All.Length - failed}/{All.Length} match");
+        return failed;
+    }
+}

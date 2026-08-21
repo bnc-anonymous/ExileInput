@@ -34,6 +34,9 @@ internal static class Program
         failed += GestureCases.Run();
 
         Console.WriteLine();
+        failed += ReleaseCases.Run();
+
+        Console.WriteLine();
         failed += StrokeCases.Run();
 
         Console.WriteLine();

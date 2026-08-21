@@ -65,4 +65,24 @@ internal static class Gesture
 
         return true;
     }
+
+    /// <summary>
+    /// Whether the keys a caller is holding should be brought up before a click is pressed.
+    ///
+    /// Only where the APPROACH pressed them, which is the whole of the rule and was the whole of
+    /// the bug. The plugin keeps one bag of held keys per caller, and both the modifier pressed
+    /// partway through a journey and a key the caller deliberately asked to hold go into it. So
+    /// releasing the bag before every click - which is what happened - let go of the caller's own
+    /// keys as well as the journey's.
+    ///
+    /// For a caller holding shift to keep a currency selected between applications, that was the
+    /// entire craft: shift came up, the selection ended with it, and the click that followed a
+    /// microsecond later was a bare left click on the item being crafted, which picks it up rather
+    /// than applying anything to it.
+    ///
+    /// A click asking for no modifiers has nothing of its own to clean up. One asking for modifiers
+    /// that were not pressed in flight has nothing either - the stroke is about to press them
+    /// itself and release them at the end.
+    /// </summary>
+    public static bool ReleaseBeforePush(bool modifiersReady) => modifiersReady;
 }
