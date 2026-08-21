@@ -46,8 +46,13 @@ internal sealed class Travel
 
     private TimeSpan Elapsed => _now?.Invoke() ?? _since.Elapsed;
 
+    /// <param name="drift">
+    /// Where on the noise this journey sits. Advanced a little per journey by whoever owns the
+    /// pointer, so consecutive reaches bow SIMILARLY rather than independently - see the comment on
+    /// the bow itself.
+    /// </param>
     public Travel(Vector2 from, Vector2 to, float minMs, float msPerRootPx, float arcPercent,
-        Random rng, Func<TimeSpan> now = null)
+        float drift, Func<TimeSpan> now = null)
     {
         _now = now;
 
@@ -59,15 +64,21 @@ internal sealed class Travel
 
         _ms = Math.Max(1f, minMs + (float)Math.Sqrt(distance) * msPerRootPx);
 
-        // Perpendicular to the line, a fraction of its length, either side at random. Scaled by the
-        // distance rather than fixed, or a short hop would bow as far as a long sweep and look like
-        // a flick rather than a reach.
+        // Perpendicular to the line, a fraction of its length, to one side or the other. Scaled by
+        // the distance rather than fixed, or a short hop would bow as far as a long sweep and look
+        // like a flick rather than a reach.
+        //
+        // How far, and which side, comes from the noise rather than from a fresh random number. A
+        // hand reaching between the same two places over and over does not curve left, then hard
+        // right, then left again - it takes much the same path each time and that path wanders over
+        // minutes. Independent draws produce a journey unrelated to the one before it, which is the
+        // same tell the aim had before it drifted.
         if (distance > 1f)
         {
             var perpendicular = new Vector2(-line.Y, line.X) / distance;
             var reach = distance * arcPercent / 100f;
 
-            _bow = perpendicular * reach * (float)(rng.NextDouble() * 2 - 1);
+            _bow = perpendicular * reach * PerlinNoise.Full(drift, 0f);
         }
     }
 
@@ -121,6 +132,12 @@ internal sealed class Travel
     /// confirming before the click, and confirming it during the approach costs nothing where
     /// confirming it on arrival costs up to two hundred milliseconds of poll with the pointer
     /// sitting still on the target.
+    ///
+    /// From the noise for the same reason the bow is: somebody's timing of a modifier against a
+    /// reach is a habit that shifts slowly, not a fresh decision every time. Sampled well away from
+    /// the bow's line so the two are not the same wander - a journey that bows further would
+    /// otherwise always be one that pressed later.
     /// </summary>
-    public static float ModifierAt(Random rng) => 0.55f + (float)rng.NextDouble() * 0.3f;
+    public static float ModifierAt(float drift) =>
+        0.55f + (PerlinNoise.Full(0f, drift + 1024f) + 1f) * 0.5f * 0.3f;
 }

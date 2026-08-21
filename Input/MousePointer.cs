@@ -159,6 +159,18 @@ internal sealed class MousePointer
     private float _drift;
 
     /// <summary>
+    /// Where on the noise the next journey sits, advanced once per journey.
+    ///
+    /// Its own line rather than the aim's, and stepped faster. They are different habits: where a
+    /// hand comes to rest on a target shifts click by click, while how it swings between two places
+    /// varies more from one reach to the next. Sharing a line would tie them together, so a click
+    /// landing left would always be one that curved the same way.
+    /// </summary>
+    private float _journey;
+
+    private const float JourneyStep = 0.19f;
+
+    /// <summary>
     /// How far a point sits from the nearest edge of the rect it was chosen inside.
     ///
     /// The whole of the rect bound, in one place with nothing else in it, because the arithmetic
@@ -314,8 +326,12 @@ internal sealed class MousePointer
         Awaiting = true;
         _bound = float.MaxValue;
 
+        // Advanced once per journey, and by an uneven step so the wander is not periodic - the same
+        // reason the aim's own line is stepped unevenly.
+        _journey += JourneyStep + (float)_rng.NextDouble() * JourneyStep;
+
         _modifiers = modifiers ?? [];
-        _modifierAt = Travel.ModifierAt(_rng);
+        _modifierAt = Travel.ModifierAt(_journey);
         _modifiersDown = false;
 
         // Nought means teleport, which is what this did before travel existed and is worth keeping
@@ -329,7 +345,7 @@ internal sealed class MousePointer
             return;
         }
 
-        _travel = new Travel(Where(), client, MinTravelMs, TravelMsPerRootPx, ArcPercent, _rng, Clock);
+        _travel = new Travel(Where(), client, MinTravelMs, TravelMsPerRootPx, ArcPercent, _journey, Clock);
     }
 
     /// <summary>

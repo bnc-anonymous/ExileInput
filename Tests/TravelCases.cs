@@ -40,6 +40,33 @@ internal sealed record TravelCase(string Name, float Distance, float Arc, string
 /// </summary>
 internal static class TravelCases
 {
+    /// <summary>The furthest a path strays from the straight line, which is its bow made visible.</summary>
+    private static float Stray(Travel travel)
+    {
+        var straightFrom = travel.At(0f);
+        var straightTo = travel.At(1f);
+        var worst = 0f;
+
+        for (var t = 0.05f; t < 1f; t += 0.05f)
+        {
+            var along = Vector2.Lerp(straightFrom, straightTo, t);
+            worst = Math.Max(worst, Vector2.Distance(travel.At(t), along));
+        }
+
+        return worst;
+    }
+
+    /// <summary>The average change between consecutive values.</summary>
+    private static float Steps(List<float> values)
+    {
+        var total = 0f;
+
+        for (var i = 1; i < values.Count; i++)
+            total += Math.Abs(values[i] - values[i - 1]);
+
+        return values.Count > 1 ? total / (values.Count - 1) : 0f;
+    }
+
     private const int Journeys = 200;
 
     internal static readonly TravelCase[] All =
@@ -125,10 +152,14 @@ internal static class TravelCases
             var eased = true;
             var ms = 0f;
             var worstOff = 0f;
+            var drift = 0f;
 
             for (var j = 0; j < Journeys; j++)
             {
-                var travel = new Travel(from, to, c.MinMs, c.MsPerRootPx, c.Arc, rng);
+                // A journey's place on the noise, advanced unevenly as the pointer does it.
+                drift += 0.19f + (float)rng.NextDouble() * 0.19f;
+
+                var travel = new Travel(from, to, c.MinMs, c.MsPerRootPx, c.Arc, drift);
                 ms = travel.Ms;
 
                 if (Vector2.Distance(travel.At(0f), from) > 0.001f)
@@ -192,7 +223,13 @@ internal static class TravelCases
         // must go down after the approach has started and before it ends, or the gesture is
         // sequential again and the whole point of pressing it in flight is lost.
         var rngAt = new Random(20260818);
-        var ats = Enumerable.Range(0, 1000).Select(_ => Travel.ModifierAt(rngAt)).ToArray();
+        var atDrift = 0f;
+
+        var ats = Enumerable.Range(0, 1000).Select(_ =>
+        {
+            atDrift += 0.19f + (float)rngAt.NextDouble() * 0.19f;
+            return Travel.ModifierAt(atDrift);
+        }).ToArray();
         var atOk = ats.Min() > 0.5f && ats.Max() < 0.9f;
 
         if (!atOk)
@@ -209,7 +246,51 @@ internal static class TravelCases
         Console.WriteLine("              up to 200ms of polling with the pointer sitting still on the target");
         Console.WriteLine();
 
-        Console.WriteLine($"{All.Length + 1 - failed}/{All.Length + 1} match");
+        // The bow, journey to journey. A hand reaching between the same two places repeatedly takes
+        // much the same path each time, and that path shifts over minutes - it does not curve left,
+        // then hard right, then left again. Measured as how far the bow moves between consecutive
+        // journeys, against what independent draws would give.
+        var bowFrom = new Vector2(200f, 200f);
+        var bowTo = new Vector2(900f, 500f);
+
+        var drifted = new List<float>();
+        var drawn = new List<float>();
+        var bowRng = new Random(20260821);
+        var bowDrift = 0f;
+
+        for (var i = 0; i < 400; i++)
+        {
+            bowDrift += 0.19f + (float)bowRng.NextDouble() * 0.19f;
+
+            // The furthest the path strays from the straight line, which is the bow made visible.
+            drifted.Add(Stray(new Travel(bowFrom, bowTo, 60f, 8f, 15f, bowDrift)));
+            drawn.Add((float)(bowRng.NextDouble() * 2 - 1));
+        }
+
+        var driftedStep = Steps(drifted);
+        var drawnStep = Steps(drawn.Select(d => d * drifted.Max()).ToList());
+        var driftedSpan = drifted.Max() - drifted.Min();
+
+        // Smooth, and not stuck: neighbours close together, but the run as a whole covering several
+        // times a single step's worth of ground. Comparing the span to the largest bow instead was
+        // asking the wrong question - a wander that never reaches the extremes is the point of it,
+        // not a failure of it.
+        var bowOk = driftedStep < drawnStep / 3f && driftedSpan > driftedStep * 3f;
+
+        if (!bowOk)
+            failed++;
+
+        Console.WriteLine($"{(bowOk ? "  ok  " : "FAIL  ")}9  The path bows like a habit, not a coin toss");
+        Console.WriteLine("        given 400 journeys between the same two points");
+        Console.WriteLine("        want  each path near the one before it, while still varying over the run");
+        Console.WriteLine($"        got   {driftedStep:0.0}px of change between neighbours against " +
+                          $"{drawnStep:0.0}px for independent draws, over a {driftedSpan:0.0}px range");
+        Console.WriteLine("        why   somebody reaching for the same slot four hundred times has muscle");
+        Console.WriteLine("              memory. Independent draws give a journey unrelated to the one before");
+        Console.WriteLine("              it, which is the same tell the aim had before it drifted");
+        Console.WriteLine();
+
+        Console.WriteLine($"{All.Length + 2 - failed}/{All.Length + 2} match");
         return failed;
     }
 }
