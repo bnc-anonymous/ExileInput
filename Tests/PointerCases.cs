@@ -220,7 +220,59 @@ internal static class PointerCases
         Console.WriteLine("              tries, then the whole thing again, for twenty seconds");
         Console.WriteLine();
 
-        Console.WriteLine($"{All.Length + 1 - failed}/{All.Length + 1} match");
+        // The same three aims, with a click between each. A caller doing the thing repeatedly is
+        // not a caller retrying something that failed, and only the click tells them apart.
+        var restSpot = new Vector2(1100f, 320f);
+        var rests = new List<int>();
+        var restClock = TimeSpan.Zero;
+
+        var resting = new MousePointer(null, new Random(20260818))
+        {
+            Cursor = () => restSpot,
+            Send = to => restSpot = to,
+            Clock = () => restClock,
+            StayPut = true,
+            TolerancePx = 40,
+            SpreadPercent = 50f,
+            MinTravelMs = 60f,
+            TravelMsPerRootPx = 8f,
+            ArcPercent = 15f,
+        };
+
+        for (var go = 0; go < 3; go++)
+        {
+            var before = restSpot;
+
+            resting.Aim(Row);
+
+            for (var i = 0; i < 200 && !resting.Arrived(); i++)
+            {
+                resting.Step();
+                restClock += TimeSpan.FromMilliseconds(16);
+            }
+
+            rests.Add(Vector2.Distance(before, restSpot) > 0.5f ? 1 : 0);
+
+            // What the caller does between aims, and the whole of the difference.
+            resting.Clicked();
+        }
+
+        var restOk = rests.Count == 3 && rests.All(m => m == 0);
+
+        if (!restOk)
+            failed++;
+
+        Console.WriteLine($"{(restOk ? "  ok  " : "FAIL  ")}8  Aiming again after a click stays put");
+        Console.WriteLine("        given the cursor already on the row, aimed at three times with a click between");
+        Console.WriteLine("        want  stay, stay, stay");
+        Console.WriteLine($"        got   {string.Join(", ", rests.Select(m => m == 0 ? "stay" : "move"))}");
+        Console.WriteLine("        why   case 7 rules out a retry doing nothing again, and a repetition is not a");
+        Console.WriteLine("              retry. Applying a currency to an item four hundred times aims at the same");
+        Console.WriteLine("              slot four hundred times, and jumping to a fresh pixel between every one of");
+        Console.WriteLine("              them is a cursor flitting about a slot it should be resting on");
+        Console.WriteLine();
+
+        Console.WriteLine($"{All.Length + 2 - failed}/{All.Length + 2} match");
         return failed;
     }
 }

@@ -195,6 +195,15 @@ internal sealed class MousePointer
     /// <summary>The rect this has already spent its one stay-put on.</summary>
     private RectangleF? _stayedAt;
 
+    /// <summary>
+    /// Records that the caller pressed something, so the next aim at the same place may stay put.
+    ///
+    /// The difference between a retry and a repetition, and the pointer cannot tell them apart on
+    /// its own: both look like the same rectangle twice. A click in between is what distinguishes
+    /// them, and the caller is the only one who knows a click happened.
+    /// </summary>
+    public void Clicked() => _stayedAt = null;
+
     private static bool Near(RectangleF a, RectangleF b) =>
         Math.Abs(a.X - b.X) < 1f && Math.Abs(a.Y - b.Y) < 1f &&
         Math.Abs(a.Width - b.Width) < 1f && Math.Abs(a.Height - b.Height) < 1f;
@@ -203,15 +212,22 @@ internal sealed class MousePointer
     {
         var here = Where();
 
-        // At most one stay-put per target, and then only until something else is aimed at.
+        // At most one stay-put per target, and then only until something else is aimed at OR the
+        // caller actually clicks.
         //
-        // Because a caller that aims at the same rect twice is a caller whose first go did not
-        // work, and the answer to that cannot be to do nothing again. The collector asks the game
-        // whether the show-stash button is lit before pressing it - a press that misses that panel
-        // walks the character out of the hideout - and when it is not lit it aims again. With the
-        // cursor already inside the rect that second aim moved nothing, tested the same pixel, and
-        // failed for the same reason, four times, then gave up and started over. Twenty seconds of
-        // warnings without the cursor moving once.
+        // Because a caller that aims at the same rect twice WITHOUT clicking is a caller whose
+        // first go did not work, and the answer to that cannot be to do nothing again. The
+        // collector asks the game whether the show-stash button is lit before pressing it - a press
+        // that misses that panel walks the character out of the hideout - and when it is not lit it
+        // aims again. With the cursor already inside the rect that second aim moved nothing, tested
+        // the same pixel, and failed for the same reason, four times, then gave up and started
+        // over. Twenty seconds of warnings without the cursor moving once.
+        //
+        // But a caller that aims, CLICKS, and aims again has not retried anything. It has done the
+        // thing and is doing it once more, which is what applying a currency to an item four
+        // hundred times looks like - and jumping to a fresh pixel between every one of them is the
+        // cursor flitting about a slot it should be resting on. Clicked clears the record, so the
+        // rule now reads: a retry moves, a repetition does not.
         //
         // Staying put is for a hand already resting where it means to click. It is not an argument
         // for staying somewhere that has just been shown not to work.

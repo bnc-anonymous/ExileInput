@@ -201,7 +201,7 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         stroke.HoldMs = Settings.ModifierHoldMs.Value;
 
         if (Gesture.StraightIn(modifiers, pointer.ModifiersReady, Buttons.IsDown))
-            return stroke.StraightIn(right);
+            return Pressed(pointer, stroke.StraightIn(right));
 
         // Whatever the JOURNEY pressed comes up first, or the stroke presses control on top of a
         // control already down and releases it once at the end - leaving the second held.
@@ -222,7 +222,21 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
             pointer.ModifiersLetGo();
         }
 
-        return stroke.Push(modifiers, right);
+        return Pressed(pointer, stroke.Push(modifiers, right));
+    }
+
+    /// <summary>
+    /// Tells the pointer a click went out, and passes the answer straight through.
+    ///
+    /// So that aiming at the same place again is understood as doing the thing twice rather than as
+    /// retrying something that did not work - the first stays where it is, the second must move.
+    /// </summary>
+    private static bool Pressed(MousePointer pointer, bool clicked)
+    {
+        if (clicked)
+            pointer.Clicked();
+
+        return clicked;
     }
 
     /// <summary>The gesture in progress for a caller, made on first use like everything else here.</summary>
