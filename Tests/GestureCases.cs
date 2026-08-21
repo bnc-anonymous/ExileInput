@@ -1,4 +1,5 @@
 using System;
+using System.Windows.Forms;
 using System.Collections.Generic;
 
 namespace ExileInput.Tests;
@@ -58,14 +59,21 @@ internal static class GestureCases
             "there is no modifier to trust, so there is nothing to confirm either. Asking anyway " +
             "would pay the poll to learn what we already know"),
 
-        new("6  Shift alone rests on the pointer's own account", false, true, true, null, true,
-            "shift has no readback here, so there is nothing to cross-check it against. Worth " +
-            "stating rather than leaving implicit: this is the one modifier taken on trust, and if " +
-            "a shift gesture ever goes out bare this case is where the assumption is written down"),
+        new("6  Shift alone is confirmed too, and goes straight in when it reads down",
+            false, true, true, true, true,
+            "shift used to be the one modifier taken on trust - the readback was only ever asked " +
+            "about control, and a shift gesture rested on the pointer's own account of itself. It " +
+            "reads back perfectly well, and now that alt is expressible the gap stopped being " +
+            "survivable: an alt that did not take applies a different currency to the item"),
 
-        new("7  Control and shift together still turn on control", true, true, true, false, false,
-            "the readback covers control, and control is the one that matters - a ctrl+shift click " +
-            "that loses its control is a plain shift click, which in a stash moves a whole stack"),
+        new("6b Shift alone that does not read down goes the long way", false, true, true, false, false,
+            "the half of case 6 that used to be impossible to write. Under the old rule this " +
+            "returned true whatever the keyboard said, because nothing asked it"),
+
+        new("7  Control and shift together need both, not either", true, true, true, false, false,
+            "a ctrl+shift click that loses its control is a plain shift click, which in a stash " +
+            "moves a whole stack. Every requested modifier has to read down, because a gesture " +
+            "that got half of what it asked for is not half-right, it is a different gesture"),
     ];
 
     internal static int Run()
@@ -79,7 +87,7 @@ internal static class GestureCases
         {
             var asked = false;
 
-            var got = Gesture.StraightIn(c.Ctrl, c.Shift, c.Ready, () =>
+            var got = Gesture.StraightIn(Modifier.Of(c.Ctrl, c.Shift), c.Ready, _ =>
             {
                 asked = true;
                 return c.ControlDown ?? false;

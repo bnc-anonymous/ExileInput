@@ -44,10 +44,13 @@ public sealed class ExileInputClient
     private Func<string, bool> _release;
     private Func<string, RectangleF, bool, bool, bool> _moveTo;
     private Func<string, Vector2, bool, bool, bool> _moveToPoint;
+    private Func<string, RectangleF, Keys[], bool> _moveToKeys;
+    private Func<string, Vector2, Keys[], bool> _moveToPointKeys;
     private Func<string, bool> _arrived;
     private Func<string, float> _drift;
     private Func<string, bool> _aiming;
     private Func<string, bool, bool, bool, bool> _click;
+    private Func<string, Keys[], bool, bool> _clickKeys;
     private Func<string, Keys, bool> _tap;
     private Func<string, Keys, bool> _hold;
     private Func<string, Keys, bool> _let;
@@ -99,10 +102,18 @@ public sealed class ExileInputClient
             _release = b.GetMethod<Func<string, bool>>("ExileInput.Release");
             _moveTo = b.GetMethod<Func<string, RectangleF, bool, bool, bool>>("ExileInput.MoveTo");
             _moveToPoint = b.GetMethod<Func<string, Vector2, bool, bool, bool>>("ExileInput.MoveToPoint");
+
+            // The modifier-set forms. Null against an older ExileInput that does not register
+            // them, which is why every call below falls back to the ctrl/shift pair rather than
+            // failing - a consumer built against the newer client keeps working against the older
+            // plugin, right up until it asks for a modifier the old shape cannot express.
+            _moveToKeys = b.GetMethod<Func<string, RectangleF, Keys[], bool>>("ExileInput.MoveToKeys");
+            _moveToPointKeys = b.GetMethod<Func<string, Vector2, Keys[], bool>>("ExileInput.MoveToPointKeys");
             _arrived = b.GetMethod<Func<string, bool>>("ExileInput.Arrived");
             _drift = b.GetMethod<Func<string, float>>("ExileInput.Drift");
             _aiming = b.GetMethod<Func<string, bool>>("ExileInput.Aiming");
             _click = b.GetMethod<Func<string, bool, bool, bool, bool>>("ExileInput.Click");
+            _clickKeys = b.GetMethod<Func<string, Keys[], bool, bool>>("ExileInput.ClickKeys");
             _tap = b.GetMethod<Func<string, Keys, bool>>("ExileInput.Tap");
             _hold = b.GetMethod<Func<string, Keys, bool>>("ExileInput.Hold");
             _let = b.GetMethod<Func<string, Keys, bool>>("ExileInput.Let");
@@ -141,6 +152,86 @@ public sealed class ExileInputClient
     /// faster of the two - the key gets the length of the journey to register, instead of the
     /// pointer sitting on the target while it is confirmed.
     /// </summary>
+    /// <summary>
+    /// Aims at a rect, pressing these modifiers on the way.
+    ///
+    /// The set form. Use it for anything involving alt, or any combination the two bools cannot
+    /// say; the ctrl/shift overload below is the same call with a shorter spelling.
+    /// </summary>
+    public bool MoveTo(RectangleF rect, Keys[] modifiers)
+    {
+        Look();
+
+        if (_moveToKeys != null)
+            return _moveToKeys(_me, rect, modifiers ?? []);
+
+        // An older ExileInput. Fall back to what it does understand, and say no rather than
+        // silently dropping a modifier it cannot be told about.
+        return Fallback(modifiers, out var ctrl, out var shift) &&
+               (_moveTo?.Invoke(_me, rect, ctrl, shift) ?? false);
+    }
+
+    /// <summary>As above, for a point rather than a rect.</summary>
+    public bool MoveTo(Vector2 client, Keys[] modifiers)
+    {
+        Look();
+
+        if (_moveToPointKeys != null)
+            return _moveToPointKeys(_me, client, modifiers ?? []);
+
+        return Fallback(modifiers, out var ctrl, out var shift) &&
+               (_moveToPoint?.Invoke(_me, client, ctrl, shift) ?? false);
+    }
+
+    /// <summary>
+    /// Clicks with these modifiers held.
+    ///
+    /// The set form, and the one to use when alt is involved: holding shift keeps a currency on the
+    /// cursor between applications, and alt on top of it changes which currency is applied, so the
+    /// combination has to be expressible as a combination.
+    /// </summary>
+    public bool Click(Keys[] modifiers, bool right = false)
+    {
+        Look();
+
+        if (_clickKeys != null)
+            return _clickKeys(_me, modifiers ?? [], right);
+
+        return Fallback(modifiers, out var ctrl, out var shift) &&
+               (_click?.Invoke(_me, ctrl, shift, right) ?? false);
+    }
+
+    /// <summary>
+    /// Whether an older plugin can be told about these modifiers, and how.
+    ///
+    /// False when the set contains anything the ctrl/shift pair cannot express - alt, most
+    /// obviously. Refusing is the right answer there: a click that quietly went out without its alt
+    /// would apply a different currency to the item, and a caller that gets a false already knows
+    /// how to treat it, because that is what a refused lease looks like too.
+    /// </summary>
+    private static bool Fallback(Keys[] modifiers, out bool ctrl, out bool shift)
+    {
+        ctrl = false;
+        shift = false;
+
+        foreach (var key in modifiers ?? [])
+        {
+            switch (key)
+            {
+                case Keys.LControlKey or Keys.RControlKey or Keys.ControlKey:
+                    ctrl = true;
+                    break;
+                case Keys.LShiftKey or Keys.RShiftKey or Keys.ShiftKey:
+                    shift = true;
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
     public bool MoveTo(RectangleF rect, bool ctrl = false, bool shift = false)
     {
         Look();

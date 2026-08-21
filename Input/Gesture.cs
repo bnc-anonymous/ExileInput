@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Windows.Forms;
 
 namespace ExileInput;
 
@@ -11,10 +13,10 @@ namespace ExileInput;
 internal static class Gesture
 {
     /// <summary>
-    /// Whether the button may go straight down on a modifier the approach already pressed.
+    /// Whether the button may go straight down on modifiers the approach already pressed.
     ///
     /// The whole point of pressing a modifier in flight is that by the time the cursor lands there
-    /// is nothing left to wait for. But "already pressed" has to mean the key is down *now*, and
+    /// is nothing left to wait for. But "already pressed" has to mean the keys are down *now*, and
     /// the first version of this meant two weaker things instead.
     ///
     /// It asked the pointer whether it had pressed anything, which stayed true after the keys were
@@ -25,21 +27,42 @@ internal static class Gesture
     ///
     /// The result was a bare left click on Faustus. On a currency item the difference between
     /// ctrl+right and right is the difference between putting it away and picking it up, so this
-    /// fails closed: anything short of "the key is down and we can see it" goes the long way, which
-    /// confirms or refuses rather than assuming.
+    /// fails closed: anything short of "the keys are down and we can see them" goes the long way,
+    /// which confirms or refuses rather than assuming.
     /// </summary>
-    /// <param name="controlIsDown">
+    /// <param name="modifiers">
+    /// What the gesture wants held. EVERY one of them must read as down, not merely one.
+    ///
+    /// This used to take two bools and verify only control - the note here said plainly that "shift
+    /// has no readback here, so a shift gesture rests on the pointer's own account of itself".
+    /// That was survivable while nothing asked for shift alone. It stops being survivable now alt
+    /// is expressible: an alt that did not take turns one currency into another, silently, at the
+    /// moment of applying it to the item.
+    /// </param>
+    /// <param name="modifiersReady">
+    /// Whether the approach believes it pressed them. Necessary, and nowhere near sufficient - see
+    /// above for what happened when it was treated as sufficient.
+    /// </param>
+    /// <param name="isDown">
     /// What the keyboard actually reports, asked for rather than handed over.
     ///
-    /// A function and not a bool because the answer is expensive: it polls the key for up to a
-    /// tenth of a second before giving up. Passing it in already evaluated reads it on every click
-    /// including the plain ones, which do not care what control is doing and would each sit through
-    /// that poll for an answer nothing looks at.
-    ///
-    /// So the order of the conditions is not just tidiness, and the test for it is not pedantry.
-    /// Only consulted when control is actually wanted - shift has no readback here, so a shift
-    /// gesture rests on the pointer's own account of itself.
+    /// A function and not a value because the answer is expensive: it polls the key state, and
+    /// evaluating it eagerly would read it on every click including the plain ones, which do not
+    /// care what any modifier is doing and would each sit through that poll for an answer nothing
+    /// looks at. So the order of the conditions is not just tidiness, and the test for it is not
+    /// pedantry - it is only consulted once something is actually wanted.
     /// </param>
-    public static bool StraightIn(bool ctrl, bool shift, bool modifiersReady, Func<bool> controlIsDown) =>
-        (ctrl || shift) && modifiersReady && (!ctrl || controlIsDown());
+    public static bool StraightIn(IReadOnlyList<Keys> modifiers, bool modifiersReady, Func<Keys, bool> isDown)
+    {
+        if (!Modifier.Any(modifiers) || !modifiersReady || isDown == null)
+            return false;
+
+        for (var i = 0; i < modifiers.Count; i++)
+        {
+            if (!isDown(modifiers[i]))
+                return false;
+        }
+
+        return true;
+    }
 }

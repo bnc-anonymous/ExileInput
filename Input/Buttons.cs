@@ -1,4 +1,5 @@
 using ExileCore;
+using System.Collections.Generic;
 using System.Windows.Forms;
 
 namespace ExileInput;
@@ -56,21 +57,33 @@ internal static class Buttons
     public static void NeverAnswers() => _readable ??= false;
 
     /// <summary>
-    /// Whether control reads as held, asked both ways it might be visible.
+    /// Whether control reads as held. Kept for the callers that only ever ask about control.
+    /// </summary>
+    public static bool ControlIsDown() => IsDown(Keys.LControlKey);
+
+    /// <summary>
+    /// Whether a modifier reads as held, asked both ways it might be visible.
     ///
     /// The Windows async state first, since that is where an injected key lands if it was injected
     /// at all, and the game's own view second. Either answering yes is a yes.
     ///
+    /// Generalised from a control-only check, and that is a safety improvement rather than tidying.
+    /// Before this, only control could be confirmed - a shift or an alt went down unverified and
+    /// nothing would notice if it had not taken. For crafting that is the difference between
+    /// applying the currency you meant and applying a different one.
+    ///
     /// One look, no waiting. Somebody who wants to wait asks again next tick.
     /// </summary>
-    public static bool ControlIsDown()
+    public static bool IsDown(Keys key)
     {
         try
         {
-            if ((GetAsyncKeyState(VkControl) & 0x8000) != 0)
+            var vk = Modifier.VirtualKey(key);
+
+            if (vk != 0 && (GetAsyncKeyState(vk) & 0x8000) != 0)
                 return true;
 
-            return Input.IsKeyDown(Keys.LControlKey);
+            return Input.IsKeyDown(key);
         }
         catch
         {
@@ -79,23 +92,54 @@ internal static class Buttons
     }
 
     /// <summary>
+    /// Whether every one of these reads as held.
+    ///
+    /// All of them, not any: a gesture that asked for shift and alt and got only shift is not
+    /// half-right, it is a different gesture with a different outcome.
+    /// </summary>
+    public static bool AllDown(IReadOnlyList<Keys> keys)
+    {
+        if (!Modifier.Any(keys))
+            return true;
+
+        for (var i = 0; i < keys.Count; i++)
+        {
+            if (!IsDown(keys[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>What was last pressed here, so that exactly that can be let go again.</summary>
+    private static Keys[] _holding = Modifier.None;
+
+    /// <summary>
     /// Presses the modifiers a gesture asked for, and only those.
     ///
-    /// Only those is the change. The old Send pressed control whenever anything at all was wanted,
-    /// so a shift-only click would have gone out as ctrl+shift. Nothing ever noticed, because
-    /// nothing asks for shift without ctrl - the one caller passes ctrl: true, shift: wanted - but
-    /// the pointer's own modifier list has always been right about this, and leaving the two to
-    /// disagree is a trap laid for whoever first wants a plain shift-click.
+    /// Only those is the change that was made when this took two bools, and the note then said the
+    /// pair was "a trap laid for whoever first wants a plain shift-click". Taking a set closes the
+    /// trap rather than widening it by one: alt is not a third bool, it is another key in a list
+    /// that was always going to have to be a list.
     /// </summary>
-    public static void Hold(bool ctrl, bool shift)
+    public static void Hold(IReadOnlyList<Keys> keys)
     {
+        if (!Modifier.Any(keys))
+            return;
+
+        var held = new Keys[keys.Count];
+
+        for (var i = 0; i < keys.Count; i++)
+            held[i] = keys[i];
+
+        // Recorded before pressing, not after. A key that may or may not have gone down is one to
+        // try to release - the same rule HeldKeys states for the same reason.
+        _holding = held;
+
         try
         {
-            if (shift)
-                Input.KeyDown(Keys.LShiftKey);
-
-            if (ctrl)
-                Input.KeyDown(Keys.LControlKey);
+            foreach (var key in held)
+                Input.KeyDown(key);
         }
         catch
         {
@@ -124,29 +168,37 @@ internal static class Buttons
     }
 
     /// <summary>
-    /// Lets go of control, whatever happened.
+    /// Lets go of every modifier, whatever happened.
     ///
-    /// Worth calling on any path out. A control left down turns every click the player makes
-    /// afterwards into a ctrl+click, which in a stash or an inventory moves things.
+    /// Worth calling on any path out, and deliberately unconditional. A control left down turns
+    /// every click the player makes afterwards into a ctrl+click, which in a stash moves things; a
+    /// shift left down makes it a whole-stack move; an alt left down is the one that will be worst
+    /// to diagnose, because on Windows it also arms the window menu.
+    ///
+    /// All three go up regardless of what was pressed. The whole point of this method is that it
+    /// does not have to know, and releasing something never held is free.
     /// </summary>
     public static void Release()
     {
+        var held = _holding;
+        _holding = Modifier.None;
+
         try
         {
-            Input.KeyUp(Keys.LControlKey);
+            foreach (var key in held)
+                Input.KeyUp(key);
 
-            // Shift as well, unconditionally. A shift left down turns a click into a whole-stack
-            // move in a stash and into a link in chat, and the whole point of this method is that
-            // it does not have to know what was pressed to be worth calling.
+            // And the standard three on top, in case something went down by a path that did not
+            // record itself. Cheap insurance against the failure that is hardest to notice.
+            Input.KeyUp(Keys.LControlKey);
             Input.KeyUp(Keys.LShiftKey);
+            Input.KeyUp(Keys.LMenu);
         }
         catch
         {
             // Releasing something never held is harmless; failing to try is not.
         }
     }
-
-    private const int VkControl = 0x11;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int key);

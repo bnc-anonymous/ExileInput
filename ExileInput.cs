@@ -46,9 +46,24 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
 
         // Aiming. A rect is what every caller has, since that is what an element reports.
         b.SaveMethod("ExileInput.MoveTo",
-            (string who, RectangleF rect, bool ctrl, bool shift) => Move(who, rect, ctrl, shift));
+            (string who, RectangleF rect, bool ctrl, bool shift) => Move(who, rect, Modifier.Of(ctrl, shift)));
         b.SaveMethod("ExileInput.MoveToPoint",
-            (string who, Vector2 client, bool ctrl, bool shift) => MoveTo(who, client, ctrl, shift));
+            (string who, Vector2 client, bool ctrl, bool shift) => MoveTo(who, client, Modifier.Of(ctrl, shift)));
+
+        // The same three, taking the modifiers as a set.
+        //
+        // Added ALONGSIDE the ctrl/shift pair rather than replacing it, and that is the whole point
+        // of doing it this way. The bridge is how other plugins reach this one, and a consumer's
+        // copy of the client file is a copy - there is no way to update it from here. Changing the
+        // shape of a registered method breaks every caller the instant this plugin reloads, before
+        // anybody has had a chance to update anything.
+        //
+        // So the old names keep working, unchanged, forever if need be. A caller moves to the new
+        // ones when it wants a modifier the old shape cannot express, and not before.
+        b.SaveMethod("ExileInput.MoveToKeys",
+            (string who, RectangleF rect, Keys[] modifiers) => Move(who, rect, modifiers));
+        b.SaveMethod("ExileInput.MoveToPointKeys",
+            (string who, Vector2 client, Keys[] modifiers) => MoveTo(who, client, modifiers));
         b.SaveMethod("ExileInput.Arrived", (string who) => Arrived(who));
         b.SaveMethod("ExileInput.Drift", (string who) => Drift(who));
         b.SaveMethod("ExileInput.Aiming", (string who) => Aiming(who));
@@ -62,7 +77,9 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
 
         // Pressing.
         b.SaveMethod("ExileInput.Click",
-            (string who, bool ctrl, bool shift, bool right) => Click(who, ctrl, shift, right));
+            (string who, bool ctrl, bool shift, bool right) => Click(who, Modifier.Of(ctrl, shift), right));
+        b.SaveMethod("ExileInput.ClickKeys",
+            (string who, Keys[] modifiers, bool right) => Click(who, modifiers, right));
 
         b.SaveMethod("ExileInput.Tap", (string who, Keys key) => Tap(who, key));
         b.SaveMethod("ExileInput.Hold", (string who, Keys key) => Hold(who, key));
@@ -96,31 +113,23 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         return keys;
     }
 
-    private bool Move(string who, RectangleF rect, bool ctrl, bool shift)
+    private bool Move(string who, RectangleF rect, Keys[] modifiers)
     {
         if (!_lease.Held(who))
             return false;
 
         var pointer = PointerFor(who);
-        pointer.Aim(rect, Modifiers(ctrl, shift));
+        pointer.Aim(rect, modifiers ?? Modifier.None);
         return true;
     }
 
-    private bool MoveTo(string who, Vector2 client, bool ctrl, bool shift)
+    private bool MoveTo(string who, Vector2 client, Keys[] modifiers)
     {
         if (!_lease.Held(who))
             return false;
 
-        PointerFor(who).Place(client, Modifiers(ctrl, shift));
+        PointerFor(who).Place(client, modifiers ?? Modifier.None);
         return true;
-    }
-
-    private static Keys[] Modifiers(bool ctrl, bool shift)
-    {
-        if (ctrl && shift) return [Keys.LControlKey, Keys.LShiftKey];
-        if (ctrl) return [Keys.LControlKey];
-        if (shift) return [Keys.LShiftKey];
-        return [];
     }
 
     private bool Arrived(string who) => _lease.Held(who) && PointerFor(who).Arrived();
@@ -152,8 +161,10 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     /// <summary>What each caller asked for, since the shared default cannot suit every target.</summary>
     private readonly Dictionary<string, int> _tolerances = new(StringComparer.OrdinalIgnoreCase);
 
-    private bool Click(string who, bool ctrl, bool shift, bool right)
+    private bool Click(string who, Keys[] modifiers, bool right)
     {
+        modifiers ??= Modifier.None;
+
         if (!_lease.Held(who))
             return false;
 
@@ -176,7 +187,7 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         var stroke = StrokeFor(who);
         stroke.HoldMs = Settings.ModifierHoldMs.Value;
 
-        if (Gesture.StraightIn(ctrl, shift, pointer.ModifiersReady, Buttons.ControlIsDown))
+        if (Gesture.StraightIn(modifiers, pointer.ModifiersReady, Buttons.IsDown))
             return stroke.StraightIn(right);
 
         // Whatever the journey may have pressed comes up first, or the stroke presses control on
@@ -184,7 +195,7 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         KeysFor(who).ReleaseAll();
         pointer.ModifiersLetGo();
 
-        return stroke.Push(ctrl, shift, right);
+        return stroke.Push(modifiers, right);
     }
 
     /// <summary>The gesture in progress for a caller, made on first use like everything else here.</summary>

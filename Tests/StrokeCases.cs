@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Windows.Forms;
 
 namespace ExileInput.Tests;
 
@@ -33,10 +34,28 @@ internal sealed class FakeButtons : IButtons
         return EverDown;
     }
 
-    public void Hold(bool ctrl, bool shift)
+    public bool IsDown(Keys key)
     {
-        Log.Add($"hold {(ctrl ? "ctrl" : "")}{(ctrl && shift ? "+" : "")}{(shift ? "shift" : "")}");
+        Log.Add("ask");
+        return EverDown;
     }
+
+    /// <summary>
+    /// Every requested modifier, asked about once as a group.
+    ///
+    /// One log entry rather than one per key, so the existing cases still read as "ask" and the
+    /// counting in them stays meaningful.
+    /// </summary>
+    public bool AllDown(IReadOnlyList<Keys> keys)
+    {
+        if (!Modifier.Any(keys))
+            return true;
+
+        Log.Add("ask");
+        return EverDown;
+    }
+
+    public void Hold(IReadOnlyList<Keys> keys) => Log.Add($"hold {Modifier.Describe(keys)}");
 
     public void Press(bool right) => Log.Add($"press {(right ? "right" : "left")}");
 
@@ -48,6 +67,9 @@ internal sealed class FakeButtons : IButtons
 internal sealed record StrokeCase(
     string Name, bool Ctrl, bool Shift, bool Right, bool Down, bool? Readable, string Reason)
 {
+    /// <summary>Alt as well, for the combinations the two bools could never say.</summary>
+    public bool Alt { get; init; }
+
     /// <summary>When the button goes down, in milliseconds, or null if it must not.</summary>
     public int? ClickAt { get; init; }
 
@@ -164,7 +186,7 @@ internal static class StrokeCases
             Never = "hold ctrl",
         },
 
-        new("8  Shift alone presses shift alone", false, true, false, false, null,
+        new("8  Shift alone presses shift alone", false, true, false, true, null,
             "the old Send pressed control whenever anything at all was wanted, so this would have " +
             "gone out as ctrl+shift. Nothing noticed because nothing asks for shift without ctrl, " +
             "but the pointer's own modifier list has always been right about it and having the two " +
@@ -172,7 +194,32 @@ internal static class StrokeCases
         {
             ClickAt = 0,
             ReleaseAt = 64,
-            Never = "ask",
+            Never = "hold ctrl",
+        },
+
+        new("9  Shift and alt together press both and confirm both", false, true, false, true, null,
+            "the combination crafting needs: shift keeps the currency on the cursor between " +
+            "applications, and alt on top of it changes which currency is applied. Two bools could " +
+            "not say this at all, which is why they became a set")
+        {
+            Alt = true,
+            ClickAt = 0,
+            ReleaseAt = 64,
+            Never = "hold ctrl",
+        },
+
+        new("10 Alt that never reads down is refused once the state is known readable",
+            false, false, false, false, true,
+            "the reason alt had to be confirmable rather than assumed. An alt that did not take " +
+            "does not fail visibly - it applies a different currency to the item, and the run " +
+            "carries on looking correct")
+        {
+            Alt = true,
+            ClickAt = null,
+
+            // 208 rather than 200 because the harness steps in eights of a tick - the same reason
+            // the sixty-millisecond hold is asserted at 64 above.
+            ReleaseAt = 208,
         },
     ];
 
@@ -198,7 +245,9 @@ internal static class StrokeCases
                 var before = keys.Log.Count;
 
                 if (!went)
-                    went = c.Straight ? stroke.StraightIn(c.Right) : stroke.Push(c.Ctrl, c.Shift, c.Right);
+                    went = c.Straight
+                        ? stroke.StraightIn(c.Right)
+                        : stroke.Push(Modifier.Of(c.Ctrl, c.Shift, c.Alt), c.Right);
 
                 stroke.Step();
 
@@ -237,8 +286,7 @@ internal static class StrokeCases
 
             Console.WriteLine($"{(ok ? "  ok  " : "FAIL  ")}{c.Name}");
             Console.WriteLine($"        given {(c.Straight ? "a modifier already held, " : "")}" +
-                              $"{(c.Ctrl ? "ctrl" : "")}{(c.Ctrl && c.Shift ? "+" : "")}{(c.Shift ? "shift" : "")}" +
-                              $"{(!c.Ctrl && !c.Shift ? "no modifier" : "")}, " +
+                              $"{Modifier.Describe(Modifier.Of(c.Ctrl, c.Shift, c.Alt))}, " +
                               $"the readback {(c.Down ? "answering yes" : "silent")}, " +
                               $"known {c.Readable switch
                               {

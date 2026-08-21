@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Windows.Forms;
 
 namespace ExileInput;
 
@@ -9,8 +11,9 @@ internal interface IButtons
     bool? Readable { get; }
     void Answered();
     void NeverAnswers();
-    bool ControlIsDown();
-    void Hold(bool ctrl, bool shift);
+    bool IsDown(Keys key);
+    bool AllDown(IReadOnlyList<Keys> keys);
+    void Hold(IReadOnlyList<Keys> keys);
     void Press(bool right);
     void Release();
 }
@@ -21,8 +24,9 @@ internal sealed class RealButtons : IButtons
     public bool? Readable => Buttons.Readable;
     public void Answered() => Buttons.Answered();
     public void NeverAnswers() => Buttons.NeverAnswers();
-    public bool ControlIsDown() => Buttons.ControlIsDown();
-    public void Hold(bool ctrl, bool shift) => Buttons.Hold(ctrl, shift);
+    public bool IsDown(Keys key) => Buttons.IsDown(key);
+    public bool AllDown(IReadOnlyList<Keys> keys) => Buttons.AllDown(keys);
+    public void Hold(IReadOnlyList<Keys> keys) => Buttons.Hold(keys);
     public void Press(bool right) => Buttons.Press(right);
     public void Release() => Buttons.Release();
 }
@@ -93,11 +97,11 @@ internal sealed class Stroke
     /// apart here, and a caller that never gets its click runs out of its own timeout and says so
     /// with far more context than this could.
     /// </summary>
-    public bool Push(bool ctrl, bool shift, bool right)
+    public bool Push(IReadOnlyList<Keys> modifiers, bool right)
     {
         // Nothing held means nothing to confirm and nothing to let go of. This is most clicks, and
         // it never waited even under the old arrangement.
-        if (!ctrl && !shift)
+        if (!Modifier.Any(modifiers))
         {
             _keys.Press(right);
             return true;
@@ -110,18 +114,17 @@ internal sealed class Stroke
 
         if (_phase == Phase.Idle)
         {
-            _keys.Hold(ctrl, shift);
+            _keys.Hold(modifiers);
 
             _phase = Phase.Settling;
             _right = right;
             _at = Reading;
         }
 
-        // Shift has no readback, so there is nothing to wait for and nothing to be wrong about.
-        if (!ctrl)
-            return Strike();
-
-        if (_keys.ControlIsDown())
+        // Every requested modifier, not just control. This used to strike immediately whenever
+        // control was not among them, on the grounds that shift had no readback - it does, and so
+        // does alt, and an unverified modifier is one that can silently fail to take.
+        if (_keys.AllDown(modifiers))
         {
             _keys.Answered();
             return Strike();
@@ -144,8 +147,8 @@ internal sealed class Stroke
             return false;
         }
 
-        // Never once answered, which means the state cannot be read from here rather than that
-        // control is not down. Refusing on that reading is how a check meant to prevent one bad
+        // Never once answered, which means the state cannot be read from here rather than that the
+        // modifiers are not down. Refusing on that reading is how a check meant to prevent one bad
         // click prevented every good one instead, four times in a row.
         _keys.NeverAnswers();
         return Strike();

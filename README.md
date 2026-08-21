@@ -24,6 +24,25 @@ if (_input.Arrived())
 _input.Release();
 ```
 
+## Modifiers
+
+`ctrl` and `shift` have bool parameters because they are what most callers want. Anything else -
+alt, or a combination the two bools cannot say - goes as a set of keys:
+
+```csharp
+// Shift keeps a currency on the cursor between applications; alt on top of it changes
+// which currency is applied. Two bools could not express that at all.
+_input.Click([Keys.LShiftKey, Keys.LMenu]);
+
+_input.MoveTo(item.GetClientRectCache, [Keys.LShiftKey, Keys.LMenu]);
+```
+
+Every requested modifier is confirmed down before the button is pressed, not just control. A
+modifier that silently failed to take does not produce a visible error — it produces a different
+action on an expensive item.
+
+The bool forms are not deprecated and are not going anywhere. They call the same code.
+
 ## Why nothing is shared but a file
 
 Everything crossing the bridge is a type both sides already have — `RectangleF`, `Vector2`, `Keys`,
