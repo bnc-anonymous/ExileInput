@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Vector2 = System.Numerics.Vector2;
 using RectangleF = SharpDX.RectangleF;
 
 namespace ExileInput.Tests;
@@ -56,6 +57,32 @@ internal sealed record AimCase(
 /// </summary>
 internal static class AimCases
 {
+    /// <summary>How far apart consecutive points are, on average.</summary>
+    private static float Average(List<Vector2> points)
+    {
+        var total = 0f;
+
+        for (var i = 1; i < points.Count; i++)
+            total += Vector2.Distance(points[i - 1], points[i]);
+
+        return points.Count > 1 ? total / (points.Count - 1) : 0f;
+    }
+
+    /// <summary>How much of the target the whole run covered, vertically.</summary>
+    private static float Span(List<Vector2> points)
+    {
+        var low = float.MaxValue;
+        var high = float.MinValue;
+
+        foreach (var p in points)
+        {
+            low = Math.Min(low, p.Y);
+            high = Math.Max(high, p.Y);
+        }
+
+        return high - low;
+    }
+
     private const int Draws = 2000;
 
     internal static readonly AimCase[] All =
@@ -106,17 +133,22 @@ internal static class AimCases
             OvershootAtMost = 3f,
         },
 
-        new("6  A wide spread reaches the floor even on a target that is not small",
-            300f, 54f, 95f, 40, false,
-            "written first as the opposite, asserting that a rect this size could not reach the " +
-            "floor. That was wrong, and wrong in a way worth keeping the record of: what the floor " +
-            "answers to is the aim point's distance from the edge, not the size of the rect. At " +
-            "ninety-five per cent the point comes within 1.35 pixels of the edge of a row that is " +
-            "54 tall, so the floor takes over exactly as it does on a five pixel rect.\n\n" +
-            "        Which leaves the guarantee narrower than case 1 suggests, and worth stating " +
-            "exactly: a landing is inside the rect whenever the aim point is at least three pixels " +
-            "inside it, and otherwise no more than three pixels out. At the default spread of " +
-            "fifty the first clause always holds, which is why case 1 is clean")
+        new("6  A wide spread no longer reaches the floor, now that aim wanders",
+            300f, 54f, 95f, 40, true,
+            "this case has been true, then false, and is now true again for a third reason - which " +
+            "is why all three are worth keeping.\n\n" +
+            "        It was written asserting a rect this size could not reach the three pixel " +
+            "floor. That was wrong: what the floor answers to is the aim point's distance from the " +
+            "edge, not the size of the rect, and uniform draws at ninety-five per cent came within " +
+            "1.35 pixels of the edge of a 54 pixel row.\n\n" +
+            "        Perlin drift does not. Uniform noise fills its range; Perlin only approaches " +
+            "its peak, and reaches it about as often as a hand puts a click exactly on a border - " +
+            "so ninety-five per cent now behaves like about seventy, and the nearest of two " +
+            "thousand draws sits nine pixels inside a row it used to graze.\n\n" +
+            "        Worth knowing rather than correcting. The setting is a ceiling that is " +
+            "approached rather than a band that is filled, aim clusters toward the middle the way " +
+            "a hand does, and the guarantee from case 1 - landings inside the rect - now holds at " +
+            "every spread instead of only the modest ones")
         {
             OvershootAtMost = 3f,
         },
@@ -146,6 +178,7 @@ internal static class AimCases
 
             var accepts = new float[Draws];
             var overshoot = new float[Draws];
+            var drift = 0f;
 
             for (var i = 0; i < Draws; i++)
             {
@@ -158,7 +191,11 @@ internal static class AimCases
                     continue;
                 }
 
-                var target = MousePointer.PointIn(rect, c.Spread, rng);
+                // The drift advances per draw, which is what a run of clicks does. Uneven steps,
+                // because an even march along the noise traces the same path at the same pace.
+                drift += 0.35f + (float)rng.NextDouble() * 0.35f;
+
+                var target = MousePointer.PointIn(rect, c.Spread, drift);
 
                 // What the edges actually allow, with no floor under it. The floor is the thing
                 // being measured, so it cannot also be the thing doing the measuring.
@@ -214,7 +251,53 @@ internal static class AimCases
             Console.WriteLine();
         }
 
-        Console.WriteLine($"{All.Length - failed}/{All.Length} match");
+        // What the noise is actually for. Uniform draws are unrelated, so consecutive clicks at one
+        // slot scatter across it; drift means each lands near the last and the cluster migrates.
+        // Both cover the target over a long run - only one looks like a hand.
+        //
+        // Asked of a real pointer rather than of the arithmetic copied out, because the step it
+        // walks along the noise is the whole of what is being measured, and a copy of it here would
+        // go on passing after the real one changed.
+        var row = new RectangleF(100f, 100f, 300f, 54f);
+        var walk = new List<Vector2>();
+        var jump = new List<Vector2>();
+        var scatter = new Random(20260821);
+
+        var hand = new MousePointer(null, new Random(20260821)) { SpreadPercent = 50f };
+
+        for (var i = 0; i < 400; i++)
+        {
+            walk.Add(hand.PointIn(row));
+
+            jump.Add(new Vector2(
+                row.X + row.Width * (0.5f + (float)(scatter.NextDouble() - 0.5) * 0.5f),
+                row.Y + row.Height * (0.5f + (float)(scatter.NextDouble() - 0.5) * 0.5f)));
+        }
+
+        var walkStep = Average(walk);
+        var jumpStep = Average(jump);
+        var walkSpan = Span(walk);
+
+        // Near its neighbour by an order of magnitude, and still covering the row rather than
+        // sitting in one spot.
+        var driftOk = walkStep < jumpStep / 5f && walkSpan > row.Height / 4f;
+
+        if (!driftOk)
+            failed++;
+
+        Console.WriteLine($"{(driftOk ? "  ok  " : "FAIL  ")}8  Aim wanders rather than jumping");
+        Console.WriteLine("        given 400 successive aims at one 300x54 row, spread 50%");
+        Console.WriteLine("        want  each landing far nearer its predecessor than a random draw would");
+        Console.WriteLine("              be, while still covering the row");
+        Console.WriteLine($"        got   {walkStep:0.0}px between neighbours against {jumpStep:0.0}px " +
+                          $"for random draws, over a {walkSpan:0.0}px span");
+        Console.WriteLine("        why   a person clicking one slot four hundred times rests somewhere, drifts,");
+        Console.WriteLine("              and settles somewhere else. Uniform draws make a cloud no hand has");
+        Console.WriteLine("              ever made - and make the same one every session, which is a signature");
+        Console.WriteLine("              of its own");
+        Console.WriteLine();
+
+        Console.WriteLine($"{All.Length + 1 - failed}/{All.Length + 1} match");
         return failed;
     }
 }

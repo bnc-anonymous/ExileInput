@@ -104,23 +104,59 @@ internal sealed class MousePointer
     internal float Accepts => Math.Min(TolerancePx, _bound);
 
     /// <summary>
-    /// A point to aim at inside a rect, spread about its centre.
+    /// A point to aim at inside a rect, wandering about its centre.
+    ///
+    /// Perlin noise rather than a fresh random number, and the difference is what happens over many
+    /// clicks rather than on any one of them. Random draws are unrelated, so four hundred clicks at
+    /// one slot scatter uniformly across it - a cloud no hand has ever made, produced identically
+    /// every session. Noise sampled along a slowly advancing line gives points near their
+    /// neighbours: the aim rests somewhere, drifts, settles somewhere else, which is what a hand on
+    /// a mouse actually does.
+    ///
+    /// The drift advances by an uneven step so the wander is not periodic either. Perlin repeats
+    /// over its permutation table, and marching along it at a constant rate would eventually trace
+    /// the same path at the same pace.
     ///
     /// Clamped at ninety-five per cent rather than a hundred so that even at the widest setting the
     /// point stays off the boundary, where a rect that is a pixel generous starts landing outside
     /// the thing it describes.
     /// </summary>
-    public Vector2 PointIn(RectangleF rect) => PointIn(rect, SpreadPercent, _rng);
+    public Vector2 PointIn(RectangleF rect)
+    {
+        _drift += DriftStep + (float)_rng.NextDouble() * DriftStep;
+        return PointIn(rect, SpreadPercent, _drift);
+    }
 
     /// <summary>The same, without needing a pointer or a game to ask it.</summary>
-    internal static Vector2 PointIn(RectangleF rect, float spreadPercent, Random rng)
+    internal static Vector2 PointIn(RectangleF rect, float spreadPercent, float drift)
     {
         var spread = Math.Clamp(spreadPercent, 0f, 95f) / 100f;
 
+        // Two samples far apart on the second axis, so the horizontal and vertical wander are not
+        // the same walk. Sampled from one line each, they would move together and the aim would
+        // slide along a diagonal.
+        var x = PerlinNoise.Full(drift, 0f);
+        var y = PerlinNoise.Full(0f, drift + 512f);
+
         return new Vector2(
-            rect.X + rect.Width * (0.5f + (float)(rng.NextDouble() - 0.5) * spread),
-            rect.Y + rect.Height * (0.5f + (float)(rng.NextDouble() - 0.5) * spread));
+            rect.X + rect.Width * (0.5f + x * 0.5f * spread),
+            rect.Y + rect.Height * (0.5f + y * 0.5f * spread));
     }
+
+    /// <summary>
+    /// How far along the noise each aim moves.
+    ///
+    /// Small, and it has to be. Perlin noise decorrelates over about one unit, so a step near that
+    /// size gives points with almost nothing to do with each other - which is uniform randomness
+    /// again, arrived at expensively. A first attempt at a third of a unit came out barely smoother
+    /// than a random draw, and it took measuring to see it.
+    ///
+    /// A tenth of a unit puts consecutive clicks a couple of pixels apart, and four hundred of them
+    /// still walk far enough along the noise to cover the target rather than hovering on one spot.
+    /// </summary>
+    private const float DriftStep = 0.08f;
+
+    private float _drift;
 
     /// <summary>
     /// How far a point sits from the nearest edge of the rect it was chosen inside.
