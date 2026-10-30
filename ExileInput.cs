@@ -44,8 +44,8 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     ///
     /// 1: the first with a version.
     /// 2: ExileInput.LastPressDownAt; letters, digits and Space held or tapped for a caller, and the player's keys pressed
-    /// again after a key block, go out with their own scan codes. Under 1 a held W did not walk in the game, and a key
-    /// pressed again after a block stayed held after the player let it go.
+    /// again after a key block, go out with their own scan codes. The scan codes turned out not to matter to the game
+    /// (see PhysicalKeys). Both versions are ExileInput2's history; this port began at 2.
     /// </summary>
     public const int BridgeVersion = 2;
 
@@ -911,7 +911,7 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
                     if (restoreHeldKeys)
                         KeyWatch.NoteHeld(key);
 
-                    // With the key's scan code, so the game takes it as the key the player holds. See PhysicalKeys.
+                    // With the key's scan code, as a keyboard sends it; the game takes either. See PhysicalKeys.
                     Safe(() => PhysicalKeys.Up(key));
                 }
             }
