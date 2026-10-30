@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace ExileInput.Tests;
@@ -57,7 +58,18 @@ internal sealed class FakeButtons : IButtons
 
     public void Hold(IReadOnlyList<Keys> keys) => Log.Add($"hold {Modifier.Describe(keys)}");
 
-    public void Press(bool right) => Log.Add($"press {(right ? "right" : "left")}");
+    /// <summary>The test's clock, so a press can be held for its time.</summary>
+    public Func<TimeSpan> Now = () => TimeSpan.Zero;
+
+    private TimeSpan _upAt = TimeSpan.MinValue;
+
+    public void Press(bool right, int holdMs)
+    {
+        Log.Add($"press {(right ? "right" : "left")} for {holdMs}ms");
+        _upAt = Now() + TimeSpan.FromMilliseconds(holdMs);
+    }
+
+    public bool PressHeld => Now() < _upAt;
 
     public void Release() => Log.Add("release");
 }
@@ -103,6 +115,9 @@ internal sealed record StrokeCase(
 internal static class StrokeCases
 {
     private const int TickMs = 16;
+
+    /// <summary>Every timing draw in these cases - the button's hold, the modifier's lead and its release - fixed.</summary>
+    private const int TimingMs = 64;
     private const int Ticks = 40;
 
     internal static readonly StrokeCase[] All =
@@ -116,14 +131,14 @@ internal static class StrokeCases
             Never = "ask",
         },
 
-        new("2  A modifier that reads back at once clicks on the same tick",
+        new("2  A modifier that reads back at once clicks once its lead is out",
             true, false, true, true, null,
-            "the ordinary ctrl+right click. Control being down is a fact, and once it has been " +
-            "read there is nothing left to wait for - the old code slept 60ms here anyway, before " +
-            "a click it had already confirmed was safe")
+            "the ordinary ctrl+right click with no journey before it. Control being down is a fact, " +
+            "but a hand's ctrl goes down 50 to 100ms before the click, so the click waits out that " +
+            "lead - 64ms here - and then holds the button for its own 64ms before the key follows")
         {
-            ClickAt = 0,
-            ReleaseAt = 64,
+            ClickAt = 64,
+            ReleaseAt = 192,
         },
 
         new("3  The modifier stays down for a moment after the click",
@@ -133,8 +148,8 @@ internal static class StrokeCases
             "click, and on a Chaos Orb that does not fail quietly - it uses the orb, onto the " +
             "cursor, where it blocks every click after it")
         {
-            ClickAt = 0,
-            ReleaseAt = 64,
+            ClickAt = 64,
+            ReleaseAt = 192,
         },
 
         new("4  Where the state cannot be read, the pause is what is left",
@@ -147,17 +162,16 @@ internal static class StrokeCases
             "two of them - the wait can only ever be as fine as the tick that carries it")
         {
             ClickAt = 208,
-            ReleaseAt = 272,
+            ReleaseAt = 336,
         },
 
         new("5  Having learned nothing answers, it stops waiting out the whole window",
             true, false, true, false, false,
             "the second click and every one after it. The confirmation is known to be useless " +
-            "here, so what is left is the pause - and 60ms was the figure the old code used for " +
-            "exactly this, which is why the setting is still called the modifier hold")
+            "here, so what is left is the lead - the time a hand's ctrl is down before its click")
         {
             ClickAt = 64,
-            ReleaseAt = 128,
+            ReleaseAt = 192,
         },
 
         new("6  A readback that has answered before and now says no refuses the click",
@@ -182,7 +196,7 @@ internal static class StrokeCases
         {
             Straight = true,
             ClickAt = 0,
-            ReleaseAt = 64,
+            ReleaseAt = 128,
             Never = "hold ctrl",
         },
 
@@ -192,8 +206,8 @@ internal static class StrokeCases
             "but the pointer's own modifier list has always been right about it and having the two " +
             "disagree is a trap for whoever wants a plain shift-click first")
         {
-            ClickAt = 0,
-            ReleaseAt = 64,
+            ClickAt = 64,
+            ReleaseAt = 192,
             Never = "hold ctrl",
         },
 
@@ -203,8 +217,8 @@ internal static class StrokeCases
             "not say this at all, which is why they became a set")
         {
             Alt = true,
-            ClickAt = 0,
-            ReleaseAt = 64,
+            ClickAt = 64,
+            ReleaseAt = 192,
             Never = "hold ctrl",
         },
 
@@ -233,8 +247,8 @@ internal static class StrokeCases
         foreach (var c in All)
         {
             var now = TimeSpan.Zero;
-            var keys = new FakeButtons { EverDown = c.Down, State = c.Readable };
-            var stroke = new Stroke(keys) { Now = () => now };
+            var keys = new FakeButtons { EverDown = c.Down, State = c.Readable, Now = () => now };
+            var stroke = new Stroke(keys) { Now = () => now, HoldMs = () => TimingMs, ModifierMs = () => TimingMs };
 
             int? clickedAt = null;
             int? releasedAt = null;
@@ -302,7 +316,49 @@ internal static class StrokeCases
             Console.WriteLine();
         }
 
-        Console.WriteLine($"{All.Length - failed}/{All.Length} match");
+        // A batch: the first click's ctrl handed to the move to the second, which clicks on it. Ctrl must come up once,
+        // after the second click's button, and never between the two. See Stroke.HandOver.
+        {
+            var now = TimeSpan.Zero;
+            var keys = new FakeButtons { EverDown = true, State = true, Now = () => now };
+            var stroke = new Stroke(keys) { Now = () => now, HoldMs = () => TimingMs, ModifierMs = () => TimingMs };
+            var ctrl = Modifier.Of(true, false, false);
+
+            void Run(int ticks)
+            {
+                for (var t = 0; t < ticks; t++)
+                {
+                    stroke.Step();
+                    now += TimeSpan.FromMilliseconds(TickMs);
+                }
+            }
+
+            var first = stroke.StraightIn(false, ctrl);
+            Run(2);
+            var heldAfterFirst = stroke.HoldingAfterClick(ctrl);
+            stroke.HandOver();
+            Run(10);
+            var releasedBetween = keys.Log.Contains("release");
+            var second = stroke.StraightIn(false, ctrl);
+            Run(20);
+            var releases = keys.Log.Count(l => l == "release");
+            var ok = first && heldAfterFirst && !releasedBetween && second && releases == 1 && !stroke.Busy;
+
+            if (!ok)
+                failed++;
+
+            Console.WriteLine($"{(ok ? "  ok  " : "FAIL  ")}11 Ctrl handed from one click to the next comes up once, after the last");
+            Console.WriteLine("        want  held after the first click, no release between, one release after the second");
+            Console.WriteLine($"        got   held after the first {heldAfterFirst}, released between {releasedBetween}, " +
+                              $"releases {releases}");
+            Console.WriteLine($"        did   {string.Join(", ", keys.Log)}");
+            Console.WriteLine("        why   a hand holds ctrl through a batch of ctrl+clicks: the player held it through 34 deposit");
+            Console.WriteLine("              clicks in one press. Letting go after each came during the next move, after that move");
+            Console.WriteLine("              had pressed it again, and the next click then waited out a fresh lead on the item");
+            Console.WriteLine();
+        }
+
+        Console.WriteLine($"{All.Length + 1 - failed}/{All.Length + 1} match");
         return failed;
     }
 }

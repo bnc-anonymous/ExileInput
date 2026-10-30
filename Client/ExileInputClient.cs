@@ -41,9 +41,14 @@ public sealed class ExileInputClient
     private readonly string _me;
 
     private Func<string, bool> _take;
+    private Func<string, int, bool> _takeWithPriority;
     private Func<string, bool> _release;
     private Func<string, RectangleF, bool, bool, bool> _moveTo;
     private Func<string, Vector2, bool, bool, bool> _moveToPoint;
+    private Func<string, Vector2, Vector2, bool> _drag;
+    private Func<string, bool> _dragging;
+    private Func<string, bool> _dragMissed;
+    private Func<string, string> _dragTrace;
     private Func<string, RectangleF, Keys[], bool> _moveToKeys;
     private Func<string, Vector2, Keys[], bool> _moveToPointKeys;
     private Func<string, bool> _arrived;
@@ -58,8 +63,35 @@ public sealed class ExileInputClient
     private Func<string, Vector2> _expected;
     private Func<string, bool> _forget;
     private Func<string, int, bool> _setTolerance;
+    private Func<string, int, bool> _setShortestMove;
+    private Func<string, int, bool> _setMoveTimePerRootPixel;
+    private Func<string, int, bool, bool> _ignorePlayerMouse;
+    private Func<string, Keys[], bool> _stopOnPlayerKeys;
+    private Func<string, int, bool, Keys, bool> _blockPlayerKeys;
+    private Func<string, bool> _keyBlockCancelled;
+    private Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool, bool> _planClicks;
+    private Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool> _extendPlan;
+    private Func<string, bool, bool> _clickOnArrival;
+    private Func<string, bool> _cancelClickOnArrival;
+    private Func<string, bool> _clickedOnArrival;
+    private Func<string, float[]> _lastMoveTimes;
+    private Func<string, string> _stopped;
+
+    private Func<string, string> _stopDetail;
+    private Func<string, string[]> _planEndsSaid;
+    private Func<string, long[], bool> _allowFocusUnder;
+    private Func<string, Vector2, float, int, Keys[], bool> _loiter;
+    private Func<string, bool> _stopLoitering;
+    private Func<string, bool> _loitering;
+    private Func<long> _lastPressDownAt;
 
     private bool _looked;
+
+    /// <summary>When the first lookup ran, and when the last retry did. See Look.</summary>
+    private DateTime _lookedAt;
+
+    private DateTime _tried;
+
 
     public ExileInputClient(GameController gc, string name)
     {
@@ -78,6 +110,26 @@ public sealed class ExileInputClient
     }
 
     /// <summary>
+    /// The running ExileInput's bridge version, as ExileInput.Version answers it: 0 for an install from before the
+    /// version existed, and -1 when none is running (see Available). Looked up afresh, as the two plugins load and reload
+    /// independently. Compare it against the version a consumer needs to tell a player to update.
+    /// </summary>
+    public int Version()
+    {
+        if (!Available)
+            return -1;
+
+        try
+        {
+            return _gc?.PluginBridge?.GetMethod<Func<int>>("ExileInput.Version")?.Invoke() ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// Finds the bridge methods, once.
     ///
     /// Once rather than per call, and lazily rather than in a constructor: plugins initialise in an
@@ -86,8 +138,27 @@ public sealed class ExileInputClient
     /// </summary>
     private void Look()
     {
-        if (_looked)
+        // **Looked up once was wrong, because the two plugins load and reload independently.**
+        //
+        // Whichever registers second is invisible to whoever bound first: reload the input plugin to
+        // pick up a new method and the consumer still holds a null for it, having latched its
+        // lookups at its own startup. The symptom is a feature that silently does nothing and a
+        // reload that does not fix it - the fix being to reload the OTHER plugin afterwards, which
+        // is a rule nobody should have to know.
+        //
+        // So a binding that came back empty is retried, slowly, for a while. Once everything asked
+        // for is in hand it latches as before and costs nothing; against an older input plugin that
+        // genuinely lacks a method, it gives up after a minute rather than asking for ever.
+        if (_looked && (_drag != null || DateTime.UtcNow - _lookedAt > TimeSpan.FromSeconds(60)))
             return;
+
+        if (_looked && DateTime.UtcNow - _tried < TimeSpan.FromSeconds(2))
+            return;
+
+        _tried = DateTime.UtcNow;
+
+        if (!_looked)
+            _lookedAt = DateTime.UtcNow;
 
         _looked = true;
 
@@ -102,6 +173,10 @@ public sealed class ExileInputClient
             _release = b.GetMethod<Func<string, bool>>("ExileInput.Release");
             _moveTo = b.GetMethod<Func<string, RectangleF, bool, bool, bool>>("ExileInput.MoveTo");
             _moveToPoint = b.GetMethod<Func<string, Vector2, bool, bool, bool>>("ExileInput.MoveToPoint");
+            _drag = b.GetMethod<Func<string, Vector2, Vector2, bool>>("ExileInput.Drag");
+            _dragging = b.GetMethod<Func<string, bool>>("ExileInput.Dragging");
+            _dragMissed = b.GetMethod<Func<string, bool>>("ExileInput.DragMissed");
+            _dragTrace = b.GetMethod<Func<string, string>>("ExileInput.DragTrace");
 
             // The modifier-set forms. Null against an older ExileInput that does not register
             // them, which is why every call below falls back to the ctrl/shift pair rather than
@@ -121,6 +196,27 @@ public sealed class ExileInputClient
             _expected = b.GetMethod<Func<string, Vector2>>("ExileInput.Expected");
             _forget = b.GetMethod<Func<string, bool>>("ExileInput.Forget");
             _setTolerance = b.GetMethod<Func<string, int, bool>>("ExileInput.SetTolerance");
+            _setShortestMove = b.GetMethod<Func<string, int, bool>>("ExileInput.SetShortestMove");
+            _takeWithPriority = b.GetMethod<Func<string, int, bool>>("ExileInput.TakeWithPriority");
+            _setMoveTimePerRootPixel = b.GetMethod<Func<string, int, bool>>("ExileInput.SetMoveTimePerRootPixel");
+            _ignorePlayerMouse = b.GetMethod<Func<string, int, bool, bool>>("ExileInput.IgnorePlayerMouse");
+            _stopOnPlayerKeys = b.GetMethod<Func<string, Keys[], bool>>("ExileInput.StopOnPlayerKeys");
+            _blockPlayerKeys = b.GetMethod<Func<string, int, bool, Keys, bool>>("ExileInput.BlockPlayerKeys");
+            _keyBlockCancelled = b.GetMethod<Func<string, bool>>("ExileInput.KeyBlockCancelled");
+            _planClicks = b.GetMethod<Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool, bool>>("ExileInput.PlanClicks");
+            _extendPlan = b.GetMethod<Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool>>("ExileInput.ExtendPlan");
+            _clickOnArrival = b.GetMethod<Func<string, bool, bool>>("ExileInput.ClickOnArrival");
+            _cancelClickOnArrival = b.GetMethod<Func<string, bool>>("ExileInput.CancelClickOnArrival");
+            _clickedOnArrival = b.GetMethod<Func<string, bool>>("ExileInput.ClickedOnArrival");
+            _lastMoveTimes = b.GetMethod<Func<string, float[]>>("ExileInput.LastMoveTimes");
+            _stopped = b.GetMethod<Func<string, string>>("ExileInput.Stopped");
+            _stopDetail = b.GetMethod<Func<string, string>>("ExileInput.StopDetail");
+            _planEndsSaid = b.GetMethod<Func<string, string[]>>("ExileInput.PlanEndsSaid");
+            _allowFocusUnder = b.GetMethod<Func<string, long[], bool>>("ExileInput.AllowFocusUnder");
+            _loiter = b.GetMethod<Func<string, Vector2, float, int, Keys[], bool>>("ExileInput.Loiter");
+            _stopLoitering = b.GetMethod<Func<string, bool>>("ExileInput.StopLoitering");
+            _loitering = b.GetMethod<Func<string, bool>>("ExileInput.Loitering");
+            _lastPressDownAt = b.GetMethod<Func<long>>("ExileInput.LastPressDownAt");
         }
         catch
         {
@@ -135,6 +231,17 @@ public sealed class ExileInputClient
     {
         Look();
         return _take?.Invoke(_me) ?? false;
+    }
+
+    /// <summary>
+    /// Claims the cursor at a priority, taking it from a holder that took it at a lower one - an ordinary Take is 0. The
+    /// holder is stopped with "TakenOver" and must release before it can take it again. False when a holder of the same
+    /// or higher priority has it, or from an ExileInput too old to have it.
+    /// </summary>
+    public bool TakeWithPriority(int priority)
+    {
+        Look();
+        return _takeWithPriority?.Invoke(_me, priority) ?? false;
     }
 
     /// <summary>Hands the cursor back, releasing any keys this plugin was holding.</summary>
@@ -286,6 +393,106 @@ public sealed class ExileInputClient
         return _expected?.Invoke(_me) ?? Vector2.Zero;
     }
 
+    /// <summary>
+    /// Why the cursor was taken away from this plugin, or "" while all is well.
+    ///
+    /// Usually "PlayerMovedTheMouse": the player reached for the mouse, which is the stop signal
+    /// and the reason there is no panic key to remember. Also reports the game losing focus, the
+    /// game taking typed input, and a move that never landed.
+    ///
+    /// **Check it on every tick of a sequence, and stop the sequence when it says something.** It
+    /// stays set until <see cref="Release"/> is called, and <see cref="Take"/> refuses until then,
+    /// so a caller that ignores it simply stops working rather than fighting the player for the
+    /// cursor - but it stops silently, and only this tells you why.
+    /// </summary>
+    public string Stopped()
+    {
+        Look();
+        return _stopped?.Invoke(_me) ?? "";
+    }
+
+    /// <summary>
+    /// What ExileInput saw when it last stopped this plugin, in one line, for a log or a dump: where the cursor was put
+    /// and where it was found. Empty before any stop, or from an ExileInput too old to say.
+    /// </summary>
+    public string StopDetail()
+    {
+        Look();
+        return _stopDetail?.Invoke(_me) ?? "";
+    }
+
+    /// <summary>
+    /// How this plugin's planned queues of clicks ended, newest last, one line each: replaced, dropped by a move elsewhere,
+    /// used up, or faded out as the cursor was given up, with how far through each was. Empty from an ExileInput too old
+    /// to say. See PlanClicks.
+    /// </summary>
+    public string[] PlanEndsSaid()
+    {
+        Look();
+        return _planEndsSaid?.Invoke(_me) ?? [];
+    }
+
+    /// <summary>
+    /// Names panels, by element address, inside which the game's input focus is not typed input for this plugin: focus
+    /// there does not stop it as GameIsTakingInput does. None clears them. For a panel with no text to type into whose
+    /// parts the game focuses anyway. False from an ExileInput too old to have it.
+    /// </summary>
+    public bool AllowFocusUnder(long[] roots)
+    {
+        Look();
+        return _allowFocusUnder?.Invoke(_me, roots ?? []) ?? false;
+    }
+
+    /// <summary>
+    /// Takes the cursor to a client-space point and keeps it moving idly round it - a circle, a figure of eight or a
+    /// wander, about radius across - for forMs, or with none until something ends it: the next move, StopLoitering, a
+    /// stop, or Release. For waiting on the game with nothing to click yet. False without the cursor, or from an
+    /// ExileInput too old to have it.
+    ///
+    /// hold: modifiers to press on the way and keep down for the click being waited on - ctrl for a ctrl+click - which
+    /// the next move asking for the same ones takes over. Ended any other way, they are let go.
+    /// </summary>
+    public bool Loiter(Vector2 centre, float radius, int forMs = 0, Keys[] hold = null)
+    {
+        Look();
+        return _loiter?.Invoke(_me, centre, radius, forMs, hold ?? []) ?? false;
+    }
+
+    /// <summary>
+    /// Loiter over an area: round its middle, about share of its smaller side across. For idling over something about to
+    /// appear or be ready - a slot, a button - with no click to make yet.
+    /// </summary>
+    public bool Loiter(RectangleF area, float share = 0.3f, int forMs = 0, Keys[] hold = null) =>
+        Loiter(new Vector2(area.X + area.Width / 2f, area.Y + area.Height / 2f), Math.Min(area.Width, area.Height) * share, forMs, hold);
+
+    /// <summary>Ends a loiter now, the cursor left where it has got to. See Loiter.</summary>
+    public bool StopLoitering()
+    {
+        Look();
+        return _stopLoitering?.Invoke(_me) ?? false;
+    }
+
+    /// <summary>Whether a loiter of this plugin's is still going. See Loiter.</summary>
+    public bool Loitering()
+    {
+        Look();
+        return _loitering?.Invoke(_me) ?? false;
+    }
+
+    /// <summary>
+    /// When the last click's button went down, as System.Diagnostics.Stopwatch.GetTimestamp - read the time since with
+    /// Stopwatch.GetElapsedTime - whichever caller sent it; 0 before any click, or from an ExileInput too old to say. A click armed with ClickOnArrival goes down on ExileInput's own thread,
+    /// before this caller's next frame. Needs nothing held.
+    /// </summary>
+    public long LastPressDownAt()
+    {
+        Look();
+        return _lastPressDownAt?.Invoke() ?? 0L;
+    }
+
+    /// <summary>Whether the cursor has been taken away from this plugin. See <see cref="Stopped"/>.</summary>
+    public bool WasStopped() => !string.IsNullOrEmpty(Stopped());
+
     /// <summary>Abandons an outstanding move, for a caller giving up on what it was doing.</summary>
     public bool Forget()
     {
@@ -305,7 +512,182 @@ public sealed class ExileInputClient
         return _setTolerance?.Invoke(_me, px) ?? false;
     }
 
+    /// <summary>
+    /// This caller's own Shortest Move in milliseconds, in place of ExileInput's menu setting. It is added to every
+    /// move's time, near or far (Travel: shortest + per root pixel x root of distance), so set it for the moves it is
+    /// meant for and back for the rest. Up to 1000; a negative value goes back to the menu's. Kept until changed, so set it back when done. Needs the cursor
+    /// taken. False from an ExileInput too old to have it.
+    /// </summary>
+    public bool SetShortestMove(int ms)
+    {
+        Look();
+        return _setShortestMove?.Invoke(_me, ms) ?? false;
+    }
+
+    /// <summary>
+    /// This caller's own Move Time Per Root Pixel in milliseconds, in place of ExileInput's menu setting, as
+    /// SetShortestMove is for Shortest Move. 0 teleports; up to 60; a negative value goes back to the menu's. Kept until
+    /// changed. Needs the cursor taken. False from an ExileInput too old to have it.
+    /// </summary>
+    public bool SetMoveTimePerRootPixel(int ms)
+    {
+        Look();
+        return _setMoveTimePerRootPixel?.Invoke(_me, ms) ?? false;
+    }
+
+    /// <summary>
+    /// For up to a second, the player's mouse movement does not stop this caller's moves; with block, the player's
+    /// movement, presses and wheel are also dropped before the game sees them. Ends early on Release or a stop. For one
+    /// move and click that must land whatever the player's hand does. Needs the cursor taken. False from an ExileInput
+    /// too old to have it.
+    /// </summary>
+    public bool IgnorePlayerMouse(int ms, bool block)
+    {
+        Look();
+        return _ignorePlayerMouse?.Invoke(_me, ms, block) ?? false;
+    }
+
+    /// <summary>
+    /// Until this caller releases the cursor or is stopped, a key the player presses - any but those given - stops it
+    /// with "PlayerPressedAKey", as moving the mouse does; keys sent through ExileInput do not count. Cleared on
+    /// release, so ask again after each Take. Needs the cursor taken. False from an ExileInput too old to have it.
+    /// </summary>
+    public bool StopOnPlayerKeys(Keys[] except)
+    {
+        Look();
+        return _stopOnPlayerKeys?.Invoke(_me, except) ?? false;
+    }
+
+    /// <summary>
+    /// For up to three seconds: every key the player holds is let go, so a walk on WASD stops, and their key presses are
+    /// dropped before the game sees them; releases and keys sent through ExileInput pass. 0 ends a block early. Does not
+    /// need the cursor taken. With restoreHeldKeys, the letters, digits and Space held when the block began and still held
+    /// when it ends are pressed again, so a walk on a held key goes on. A press of cancelKey, if not Keys.None, ends the
+    /// key block and the mouse block at once, and is itself dropped; see KeyBlockCancelled. False from an ExileInput too
+    /// old to have it.
+    /// </summary>
+    public bool BlockPlayerKeys(int ms, bool restoreHeldKeys, Keys cancelKey)
+    {
+        Look();
+        return _blockPlayerKeys?.Invoke(_me, ms, restoreHeldKeys, cancelKey) ?? false;
+    }
+
+    /// <summary>Whether the player ended the last key block with its cancel key, cleared by the read.</summary>
+    public bool KeyBlockCancelled()
+    {
+        Look();
+        return _keyBlockCancelled?.Invoke(_me) ?? false;
+    }
+
+    /// <summary>
+    /// A queue of clicks, in order, planned now and, with show, drawn on screen: each path, an L or R where a button goes
+    /// down (bright) and comes up (dim), and C, S or A where a modifier does. Each click is at its point where points
+    /// gives one (NaN for none), or else in its rectangle where ExileInput would aim; a right click where rights says so;
+    /// with its modifiers; and its move at shortestMoveMs's shortest move, -1 for ExileInput's own. Still move to each
+    /// in turn - to the point, or to the rectangle where no point was given - and click; a move to the next one makes the
+    /// journey drawn, and anything else drops the queue. No clicks drops it. Needs the cursor taken. False from an
+    /// ExileInput too old to have it.
+    /// </summary>
+    public bool PlanClicks(RectangleF[] rects, Vector2[] points, bool[] rights, Keys[][] modifiers, int[] shortestMoveMs, bool show)
+    {
+        Look();
+        return _planClicks?.Invoke(_me, rects, points, rights, modifiers, shortestMoveMs, show) ?? false;
+    }
+
+    /// <summary>
+    /// Clicks added to the end of the queue PlanClicks made, planned as it plans them from where the queue's last click
+    /// lands, rather than the queue planned again. False with no queue to add to, without the cursor, or from an
+    /// ExileInput too old to have it.
+    /// </summary>
+    public bool ExtendPlan(RectangleF[] rects, Vector2[] points, bool[] rights, Keys[][] modifiers, int[] shortestMoveMs)
+    {
+        Look();
+        return _extendPlan?.Invoke(_me, rects, points, rights, modifiers, shortestMoveMs) ?? false;
+    }
+
+    /// <summary>
+    /// Arms a plain left or right click to go out the moment the cursor is put on the target of the move in hand, from
+    /// ExileInput's own input thread rather than this caller's next frame. It stays armed through a fresh move, so
+    /// re-aiming keeps it. False without the cursor, or from an ExileInput too old to have it - then click as usual.
+    /// </summary>
+    public bool ClickOnArrival(bool right = false)
+    {
+        Look();
+        return _clickOnArrival?.Invoke(_me, right) ?? false;
+    }
+
+    /// <summary>Disarms the click on arrival; true when one was armed and had not gone out yet.</summary>
+    public bool CancelClickOnArrival()
+    {
+        Look();
+        return _cancelClickOnArrival?.Invoke(_me) ?? false;
+    }
+
+    /// <summary>Whether the armed click went out on arrival, read once.</summary>
+    public bool ClickedOnArrival()
+    {
+        Look();
+        return _clickedOnArrival?.Invoke(_me) ?? false;
+    }
+
+    /// <summary>
+    /// The last move's wait for a click's button before setting off and its own length, in milliseconds, and whether it
+    /// swooped and how far it overshot, in pixels; null from an ExileInput too old to say. One that gives the times
+    /// alone reports no swoop and no overshoot.
+    /// </summary>
+    public (float WaitMs, float TravelMs, bool Swooped, float OvershotPx)? LastMoveTimes()
+    {
+        Look();
+
+        return _lastMoveTimes?.Invoke(_me) switch
+        {
+            [var wait, var travel, var stretch, var overshot, ..] => (wait, travel, stretch > 1f, overshot),
+            [var wait, var travel, ..] => (wait, travel, false, 0f),
+            _ => null,
+        };
+    }
+
     /// <summary>Presses and releases a key.</summary>
+    /// <summary>
+    /// Presses at one point, travels to another, and lets go there. See ExileInput's Drag.
+    ///
+    /// One call rather than a press and a release to pair up, so nothing here can leave a button
+    /// held: the input plugin owns the gesture and puts it down on every way out, including this
+    /// plugin crashing or being reloaded mid-drag.
+    /// </summary>
+    public bool Drag(Vector2 from, Vector2 to)
+    {
+        Look();
+        return _drag?.Invoke(_me, from, to) ?? false;
+    }
+
+    /// <summary>
+    /// Whether this build of ExileInput offers a drag at all.
+    ///
+    /// The two plugins are loaded separately and reloaded separately, so a consumer can be newer
+    /// than the input it talks to - and a missing method looks exactly like a refused one from the
+    /// outside. Worth telling apart: one is fixed by reloading, the other is not.
+    /// </summary>
+    public bool CanDrag => _drag != null;
+
+    /// <summary>
+    /// Whether the last drag gave up because the thing under the cursor was not what was aimed at.
+    ///
+    /// The input plugin asks the game what the cursor is over before it presses, so a drag that
+    /// never happened is told apart from one that happened and achieved nothing.
+    /// </summary>
+    public bool DragMissed() => _dragMissed?.Invoke(_me) ?? false;
+
+    /// <summary>Where the cursor really was at each step of the last drag. See ExileInput's Trace.</summary>
+    public string DragTrace() => _dragTrace?.Invoke(_me) ?? "not available";
+
+    /// <summary>Whether a drag is still in flight, so a caller can wait rather than guess.</summary>
+    public bool Dragging()
+    {
+        Look();
+        return _dragging?.Invoke(_me) ?? false;
+    }
+
     public bool Tap(Keys key)
     {
         Look();

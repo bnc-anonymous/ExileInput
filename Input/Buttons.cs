@@ -1,4 +1,5 @@
 using ExileCore;
+using System;
 using System.Collections.Generic;
 using System.Windows.Forms;
 
@@ -153,17 +154,172 @@ internal static class Buttons
     ///
     /// Nothing here releases anything, because the caller decides when the modifier comes up.
     /// </summary>
-    public static void Press(bool right)
+    /// <summary>
+    /// Puts a mouse button down and leaves it there, for a drag.
+    ///
+    /// **Press is a whole click and cannot be used for this.** It sends the down and the up in one
+    /// call, so a drag built on it pressed and released at the source and then moved the cursor with
+    /// nothing held - which is exactly what a drag is not. Held separately, and remembered, so
+    /// LetGo can put it up on any path out even where nothing knows a drag was running.
+    /// </summary>
+    public static void Hold(bool right)
     {
         if (right)
         {
             Input.RightDown();
-            Input.RightUp();
+            _right = true;
         }
         else
         {
             Input.LeftDown();
+            _left = true;
+        }
+    }
+
+    /// <summary>
+    /// Lets go of whichever mouse button is being held, if any.
+    ///
+    /// Unconditional in the same spirit as the modifier release below it: a left button left down is
+    /// the worst thing this plugin can leave behind, so it comes up on every way out rather than
+    /// only where somebody remembered a drag was in progress.
+    /// </summary>
+    public static void LetGo()
+    {
+        EndPress();
+
+        if (_left)
+        {
             Input.LeftUp();
+            _left = false;
+        }
+
+        if (_right)
+        {
+            Input.RightUp();
+            _right = false;
+        }
+    }
+
+    /// <summary>Whether a mouse button is being held right now. See Hold.</summary>
+    public static bool Holding => _left || _right;
+
+    private static bool _left;
+    private static bool _right;
+
+    /// <summary>
+    /// Puts a button down for a click and leaves it there for holdMs, after which Step brings it up. Nothing waits: the
+    /// release comes from the plugin's own tick, whoever holds the cursor by then, so a caller letting go of the cursor
+    /// straight after its click does not cut the hold short. A click already down is brought up first.
+    ///
+    /// It was a down and an up in one call, held for no time at all; a person's click is held 50 to 100 ms. See
+    /// HumanTiming.
+    /// </summary>
+    public static void Press(bool right, int holdMs)
+    {
+        if (_pressUpAt != 0)
+            EndPress();
+
+        if (right)
+            Input.RightDown();
+        else
+            Input.LeftDown();
+
+        _pressRight = right;
+        LastPressDownAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        _pressUpAt = Environment.TickCount64 + Math.Max(0, holdMs);
+    }
+
+    /// <summary>
+    /// When the last click's button went down, as System.Diagnostics.Stopwatch.GetTimestamp, so a caller reads the time
+    /// since with Stopwatch.GetElapsedTime; 0 before any. The Stopwatch rather than Environment.TickCount64, which moves
+    /// in steps of about 15.6ms. For a caller timing what the game does after its click from the moment the game was
+    /// sent it, rather than from its own next frame. See ExileInput.LastPressDownAt.
+    /// </summary>
+    public static long LastPressDownAt { get; private set; }
+
+    /// <summary>When the button of the click in hand comes up, as Environment.TickCount64; 0 with none down.</summary>
+    private static long _pressUpAt;
+
+    private static bool _pressRight;
+
+    /// <summary>What to do once the click's button is up and AfterPressMs more has gone by: let go of its modifiers.</summary>
+    private static Action _afterPress;
+
+    private static int _afterPressMs;
+
+    /// <summary>When the after-press action is due, once the button is up; 0 until then.</summary>
+    private static long _afterPressAt;
+
+    /// <summary>Whether a click's button is down now. See Press.</summary>
+    public static bool PressHeld => _pressUpAt != 0;
+
+    /// <summary>How long until the click's button comes up, in milliseconds; 0 with none down.</summary>
+    public static int MsUntilPressUp => _pressUpAt == 0 ? 0 : (int)Math.Max(0L, _pressUpAt - Environment.TickCount64);
+
+    /// <summary>
+    /// Does this delayMs after the click's button comes up, or after now with none down: how a caller giving the cursor
+    /// back mid-click still lets go of ctrl after the button rather than before it. A second request replaces the first.
+    /// </summary>
+    public static void AfterPress(int delayMs, Action act)
+    {
+        _afterPress = act;
+        _afterPressMs = Math.Max(0, delayMs);
+        _afterPressAt = _pressUpAt == 0 ? Environment.TickCount64 + _afterPressMs : 0;
+    }
+
+    /// <summary>Brings a click's button up when its hold is over, then runs what was to follow it. Called every tick.</summary>
+    public static void Step()
+    {
+        var now = Environment.TickCount64;
+
+        if (_pressUpAt != 0 && now >= _pressUpAt)
+        {
+            Up(_pressRight);
+            _pressUpAt = 0;
+
+            if (_afterPress != null)
+                _afterPressAt = now + _afterPressMs;
+        }
+
+        if (_afterPress != null && _pressUpAt == 0 && _afterPressAt != 0 && now >= _afterPressAt)
+        {
+            var act = _afterPress;
+            _afterPress = null;
+            _afterPressAt = 0;
+            act();
+        }
+    }
+
+    /// <summary>Brings a click's button up now and runs what was to follow it, for a stop or an unload.</summary>
+    public static void EndPress()
+    {
+        if (_pressUpAt != 0)
+        {
+            Up(_pressRight);
+            _pressUpAt = 0;
+        }
+
+        if (_afterPress != null)
+        {
+            var act = _afterPress;
+            _afterPress = null;
+            _afterPressAt = 0;
+            act();
+        }
+    }
+
+    private static void Up(bool right)
+    {
+        try
+        {
+            if (right)
+                Input.RightUp();
+            else
+                Input.LeftUp();
+        }
+        catch
+        {
+            // Nothing more to be done; LetGo tries again on the way out.
         }
     }
 
@@ -178,21 +334,36 @@ internal static class Buttons
     /// All three go up regardless of what was pressed. The whole point of this method is that it
     /// does not have to know, and releasing something never held is free.
     /// </summary>
-    public static void Release()
+    public static void Release(IReadOnlyList<Keys> keep = null)
     {
+        // The mouse button too, which this did not do and every caller assumed it did. Abandon, a
+        // stale lease and the plugin unloading all come through here; a drag running when any of
+        // those happens has to end with the button up. See Hold.
+        LetGo();
+
         var held = _holding;
         _holding = Modifier.None;
+
+        // Keys another holder keeps down - a loiter's ctrl, for the click it waits on - are left alone. Only a gesture
+        // ending passes any; every way of giving the cursor up releases everything. See Stroke.KeepHeld.
+        bool Kept(Keys key) => keep != null && System.Linq.Enumerable.Contains(keep, key);
 
         try
         {
             foreach (var key in held)
-                Input.KeyUp(key);
+                if (!Kept(key))
+                    Input.KeyUp(key);
 
             // And the standard three on top, in case something went down by a path that did not
             // record itself. Cheap insurance against the failure that is hardest to notice.
-            Input.KeyUp(Keys.LControlKey);
-            Input.KeyUp(Keys.LShiftKey);
-            Input.KeyUp(Keys.LMenu);
+            if (!Kept(Keys.LControlKey))
+                Input.KeyUp(Keys.LControlKey);
+
+            if (!Kept(Keys.LShiftKey))
+                Input.KeyUp(Keys.LShiftKey);
+
+            if (!Kept(Keys.LMenu))
+                Input.KeyUp(Keys.LMenu);
         }
         catch
         {

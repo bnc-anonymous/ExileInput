@@ -43,6 +43,15 @@ internal static class Program
         failed += LeaseCases.Run();
 
         Console.WriteLine();
+        failed += StopCases.Run();
+
+        Console.WriteLine();
+        failed += SeedCases.Run();
+
+        Console.WriteLine();
+        failed += SettingsCases.Run();
+
+        Console.WriteLine();
         Console.WriteLine(failed == 0
             ? "all tables match"
             : $"{failed} case(s) do not match");

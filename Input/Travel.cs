@@ -34,7 +34,7 @@ internal sealed class Travel
     private readonly Vector2 _from;
     private readonly Vector2 _to;
     private readonly Vector2 _bow;
-    private readonly float _ms;
+    private float _ms;
 
     /// <summary>
     /// What time it is, for driving a journey by hand.
@@ -44,17 +44,61 @@ internal sealed class Travel
     /// </summary>
     private readonly Func<TimeSpan> _now;
 
-    private TimeSpan Elapsed => _now?.Invoke() ?? _since.Elapsed;
+    /// <summary>The injected clock's reading when the journey was made; unused with the stopwatch.</summary>
+    private readonly TimeSpan _madeAt;
+
+    /// <summary>How long after it was made the journey sets off. See MousePointer.MoveDelayMs.</summary>
+    private readonly float _delayMs;
+
+    /// <summary>Time since the journey was made, by the clock.</summary>
+    private TimeSpan Real => _now != null ? _now() - _madeAt : _since.Elapsed;
+
+    /// <summary>
+    /// Time since the journey set off, negative while it waits to: by the clock, or once the pointer steps it, the time
+    /// it has stepped through, no more than the step's most. See Advance.
+    /// </summary>
+    private TimeSpan Elapsed => (_stepped ? _steppedThrough : Real) - TimeSpan.FromMilliseconds(_delayMs);
+
+    private bool _stepped;
+    private TimeSpan _steppedThrough;
+    private TimeSpan _lastReal;
+
+    /// <summary>
+    /// Moves the journey on by the time since the last step, mostStep at most. Called by the pointer each step.
+    ///
+    /// **A stall is not a jump**: the whole process stopped for 82.8ms of garbage collection in one window (dump
+    /// 2026-10-11 22:06:31), and by the clock alone the next step put the cursor most of a 130ms journey further on at
+    /// once - a teleport, as the player saw it. Stepped through at mostStep at most, the journey picks up where it was and
+    /// takes that much longer. A step is 6 to 16ms at the HUD's rates, so only a stalled one is held back. See
+    /// ExileInputSettings.MostMoveTimePerFrameMs.
+    /// </summary>
+    public void Advance(TimeSpan mostStep)
+    {
+        var real = Real;
+        var step = real - _lastReal;
+
+        _lastReal = real;
+        _stepped = true;
+
+        if (step > mostStep)
+            step = mostStep;
+
+        if (step > TimeSpan.Zero)
+            _steppedThrough += step;
+    }
 
     /// <param name="drift">
     /// Where on the noise this journey sits. Advanced a little per journey by whoever owns the
     /// pointer, so consecutive reaches bow SIMILARLY rather than independently - see the comment on
     /// the bow itself.
     /// </param>
+    /// <param name="delayMs">How long the journey waits before setting off: while a click's button is still down.</param>
     public Travel(Vector2 from, Vector2 to, float minMs, float msPerRootPx, float arcPercent,
-        float drift, Func<TimeSpan> now = null)
+        float drift, Func<TimeSpan> now = null, float delayMs = 0f)
     {
         _now = now;
+        _madeAt = now?.Invoke() ?? TimeSpan.Zero;
+        _delayMs = Math.Max(0f, delayMs);
 
         _from = from;
         _to = to;
@@ -62,7 +106,11 @@ internal sealed class Travel
         var line = to - from;
         var distance = line.Length();
 
-        _ms = Math.Max(1f, minMs + (float)Math.Sqrt(distance) * msPerRootPx);
+        // Give or take DurationSpread, from the noise: a run of equal hops otherwise kept the beat of a metronome. Sampled
+        // faster than the bow so neighbouring journeys differ, and well away from it so a longer journey is not always a
+        // more bowed one.
+        _ms = Math.Max(1f, (minMs + (float)Math.Sqrt(distance) * msPerRootPx) *
+                           (1f + DurationSpread * PerlinNoise.Full(drift * 2.5f + 2048f, 0.5f)));
 
         // Perpendicular to the line, a fraction of its length, to one side or the other. Scaled by
         // the distance rather than fixed, or a short hop would bow as far as a long sweep and look
@@ -82,19 +130,200 @@ internal sealed class Travel
         }
     }
 
+    /// <summary>How far a journey's duration may stray either way from its distance's own, as a fraction. Chosen.</summary>
+    internal const float DurationSpread = 0.15f;
+
+    /// <summary>
+    /// The power the journey's time is raised to before the easing, under one: the first half of the time covers more
+    /// than half the way, and the slowing into the target takes longer than the speeding away. 0.85 puts about 58% of
+    /// the way at half time and the peak speed at about four tenths of it. Chosen, as a hand's reach is commonly
+    /// described, not measured.
+    /// </summary>
+    internal const float ApproachSkew = 0.85f;
+
     /// <summary>How long this journey was given, in milliseconds.</summary>
     public float Ms => _ms;
+
+    /// <summary>
+    /// A journey's occasional flourishes, decided when it is planned: a run past its target and back over SettleMs, and
+    /// a stretch of its time by DurationScale for a swoop's longer way. See Shape and ClickPlan.Make.
+    /// </summary>
+    internal readonly record struct Flourish(Vector2 Overshoot, float SettleMs, float DurationScale)
+    {
+        public static readonly Flourish None = new(Vector2.Zero, 0f, 1f);
+    }
+
+    /// <summary>
+    /// Gives the journey its flourishes: its time stretched, and a run past its target by Overshoot, back onto it over
+    /// SettleMs added to the end. The journey still ends exactly on its target, and is not done until it is there, so
+    /// nothing that waits on arrival sees the overshoot.
+    /// </summary>
+    public void Shape(Flourish flourish)
+    {
+        _ms *= Math.Max(1f, flourish.DurationScale);
+
+        if (flourish.Overshoot == Vector2.Zero || flourish.SettleMs <= 0f)
+            return;
+
+        _overshoot = flourish.Overshoot;
+        _settleShare = flourish.SettleMs / (_ms + flourish.SettleMs);
+        _ms += flourish.SettleMs;
+    }
+
+    private Vector2 _overshoot;
+
+    /// <summary>The share of the journey's time spent settling back from an overshoot onto the target. See Shape.</summary>
+    private float _settleShare;
+
+    /// <summary>The share of the way to the target, past the settle: the way is made in the time before it.</summary>
+    private float MainShare(float t) => _settleShare > 0f ? Math.Clamp(t / (1f - _settleShare), 0f, 1f) : t;
+
+    /// <summary>
+    /// How far past the target the cursor is at this share of the time: building over the last part of the way, to the
+    /// whole overshoot as the way ends, and easing back to none over the settle.
+    /// </summary>
+    private Vector2 OvershootAt(float t)
+    {
+        if (_settleShare <= 0f)
+            return Vector2.Zero;
+
+        var turn = 1f - _settleShare;
+
+        if (t < turn)
+            return _overshoot * Smooth(Math.Clamp((t / turn - (1f - OvershootBuilds)) / OvershootBuilds, 0f, 1f));
+
+        return _overshoot * (1f - Smooth(Math.Clamp((t - turn) / _settleShare, 0f, 1f)));
+    }
+
+    /// <summary>The last share of the way over which an overshoot builds. Chosen.</summary>
+    private const float OvershootBuilds = 0.35f;
+
+    private static float Smooth(float u) => u * u * (3f - 2f * u);
 
     /// <summary>How far through the journey, from nought to one.</summary>
     public float Progress => ProgressAt((float)Elapsed.TotalMilliseconds);
 
     public bool Done => Progress >= 1f;
 
+    /// <summary>How long is left of the journey, in milliseconds, its wait to set off included.</summary>
+    public float RemainingMs => Math.Max(0f, _ms - (float)Elapsed.TotalMilliseconds);
+
     /// <summary>How far through the journey a given elapsed time is.</summary>
     public float ProgressAt(float ms) => Math.Clamp(ms / _ms, 0f, 1f);
 
     /// <summary>Where the cursor should be this instant.</summary>
-    public Vector2 Now() => At(Progress);
+    public Vector2 Now()
+    {
+        if (!_glide)
+            return At(Progress);
+
+        var elapsed = (float)Elapsed.TotalMilliseconds;
+
+        // Waiting on a click's button: creeping along the start of the way, CreepPx at most by the time it is up.
+        if (elapsed < 0f)
+            return Curve(_delayMs > 0f ? _creep * Math.Clamp(1f + elapsed / _delayMs, 0f, 1f) : 0f);
+
+        var progress = ProgressAt(elapsed);
+
+        return Curve(_creep + (1f - _creep) * Eased(MainShare(progress))) + OvershootAt(progress);
+    }
+
+    /// <summary>
+    /// Makes this a gliding journey, for a click planned in a queue: along a cubic curve through these two control
+    /// points - set so the way into one click already heads for the next, and the queue reads as one curve - creeping
+    /// up to creepPx along it while a click's button is still down, and arriving still moving at EndSpeed of its pace
+    /// rather than at rest. A click a little in motion is what a hand makes; the game takes it as a click, not a drag.
+    /// </summary>
+    public void Glide(Vector2 control1, Vector2 control2, float creepPx)
+    {
+        _glide = true;
+        _control1 = control1;
+        _control2 = control2;
+
+        // The curve's own parameter does not run evenly along it - near a control point it covers more ground - so
+        // the share crept is found by distance along the curve, not as creepPx over the length.
+        _creep = 0f;
+
+        if (Vector2.Distance(_from, _to) <= 1f || creepPx <= 0f)
+            return;
+
+        float low = 0f, high = MostCreep;
+
+        if (Vector2.Distance(_from, Curve(high)) <= creepPx)
+        {
+            _creep = high;
+            return;
+        }
+
+        for (var i = 0; i < 20; i++)
+        {
+            var mid = (low + high) / 2f;
+
+            if (Vector2.Distance(_from, Curve(mid)) < creepPx)
+                low = mid;
+            else
+                high = mid;
+        }
+
+        _creep = low;
+    }
+
+    /// <summary>
+    /// Where the creep ends: the point a gliding journey has reached when the click before it lets its button up, its
+    /// start for any other. See Glide and ClickPlan.DrawItem.
+    /// </summary>
+    public Vector2 CreptTo => _glide ? Curve(_creep) : _from;
+
+    private bool _glide;
+    private Vector2 _control1, _control2;
+
+    /// <summary>The share of the way crept while waiting on a click's button. See Glide.</summary>
+    private float _creep;
+
+    /// <summary>The most of a journey crept while waiting: on a short hop CreepPx would be much of the way.</summary>
+    private const float MostCreep = 0.15f;
+
+    /// <summary>
+    /// A gliding journey's speed into its click, as a share of its pace blended into the easing: smoothstep alone
+    /// arrives at rest. 0.2, so it arrives still moving at about the speed the next journey creeps at. Chosen, not
+    /// measured.
+    /// </summary>
+    internal const float EndSpeed = 0.2f;
+
+    /// <summary>How far along the way a fraction of the time is: smoothstep over skewed time, and for a gliding journey
+    /// blended with the time itself so it is not at rest at either end. See ApproachSkew and EndSpeed.</summary>
+    private float Eased(float t)
+    {
+        var u = MathF.Pow(Math.Clamp(t, 0f, 1f), ApproachSkew);
+        var smooth = u * u * (3f - 2f * u);
+
+        return _glide ? (1f - EndSpeed) * smooth + EndSpeed * u : smooth;
+    }
+
+    /// <summary>
+    /// The point a share of the way along the path: the cubic curve of a gliding journey, else the quadratic bow.
+    /// </summary>
+    private Vector2 Curve(float s)
+    {
+        s = Math.Clamp(s, 0f, 1f);
+
+        if (_glide)
+        {
+            var r = 1f - s;
+
+            return r * r * r * _from + 3f * r * r * s * _control1 + 3f * r * s * s * _control2 + s * s * s * _to;
+        }
+
+        // A quadratic bezier through a control point off the midpoint, which is the cheapest curve
+        // that starts and ends exactly where it must. The bow is doubled because a bezier only
+        // reaches half way to its control point.
+        var control = (_from + _to) / 2f + _bow * 2f;
+
+        var a = Vector2.Lerp(_from, control, s);
+        var b = Vector2.Lerp(control, _to, s);
+
+        return Vector2.Lerp(a, b, s);
+    }
 
     /// <summary>
     /// Where the cursor should be a given fraction of the way through.
@@ -103,41 +332,6 @@ internal sealed class Travel
     /// thing here that cannot be checked by looking at it - it is a few hundred milliseconds of
     /// cursor somewhere off screen - so the alternative to driving it by hand is not testing it.
     /// </summary>
-    public Vector2 At(float t)
-    {
-        t = Math.Clamp(t, 0f, 1f);
+    public Vector2 At(float t) => Curve(Eased(MainShare(t))) + OvershootAt(Math.Clamp(t, 0f, 1f));
 
-        // Smoothstep: still at both ends, quickest in the middle.
-        var eased = t * t * (3f - 2f * t);
-
-        // A quadratic bezier through a control point off the midpoint, which is the cheapest curve
-        // that starts and ends exactly where it must. The bow is doubled because a bezier only
-        // reaches half way to its control point.
-        var control = (_from + _to) / 2f + _bow * 2f;
-
-        var a = Vector2.Lerp(_from, control, eased);
-        var b = Vector2.Lerp(control, _to, eased);
-
-        return Vector2.Lerp(a, b, eased);
-    }
-
-    /// <summary>
-    /// Where a modifier should go down, as a fraction of the journey.
-    ///
-    /// Not at the start and not on arrival. Reaching for control before deciding where to click is
-    /// not what a hand does, and pressing it on arrival is the tell this exists to remove - it
-    /// makes the gesture strictly sequential, one thing at a time, in a way nothing physical is.
-    ///
-    /// The last third, varied per journey. It also happens to be the reliable choice: the key needs
-    /// confirming before the click, and confirming it during the approach costs nothing where
-    /// confirming it on arrival costs up to two hundred milliseconds of poll with the pointer
-    /// sitting still on the target.
-    ///
-    /// From the noise for the same reason the bow is: somebody's timing of a modifier against a
-    /// reach is a habit that shifts slowly, not a fresh decision every time. Sampled well away from
-    /// the bow's line so the two are not the same wander - a journey that bows further would
-    /// otherwise always be one that pressed later.
-    /// </summary>
-    public static float ModifierAt(float drift) =>
-        0.55f + (PerlinNoise.Full(0f, drift + 1024f) + 1f) * 0.5f * 0.3f;
 }
