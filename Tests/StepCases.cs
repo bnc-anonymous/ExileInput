@@ -14,6 +14,18 @@ namespace ExileInput.Tests;
 internal sealed class FakeStepIo : IStepIo
 {
     public readonly List<string> Log = [];
+    public readonly List<double> At = [];
+
+    /// <summary>What was done, and when on the clock.</summary>
+    private void Note(string what)
+    {
+        Log.Add(what);
+        At.Add(Ms);
+    }
+
+    /// <summary>When this was done, or NaN.</summary>
+    public double When(string what) => Log.IndexOf(what) is var i and >= 0 ? At[i] : double.NaN;
+
     public readonly HashSet<Keys> Down = [];
     public double Ms;
     public bool KeysTake = true;
@@ -27,7 +39,7 @@ internal sealed class FakeStepIo : IStepIo
 
     public void Travel(int stop, Keys[] leadKeys)
     {
-        Log.Add($"travel {stop + 1}" + (leadKeys.Length > 0 ? $" lead {string.Join("+", leadKeys)}" : ""));
+        Note($"travel {stop + 1}" + (leadKeys.Length > 0 ? $" lead {string.Join("+", leadKeys)}" : ""));
         _arriveAt = Ms + 100;
         _lead = leadKeys;
     }
@@ -46,7 +58,7 @@ internal sealed class FakeStepIo : IStepIo
 
     public void KeyDown(Keys key)
     {
-        Log.Add($"down {key}");
+        Note($"down {key}");
 
         if (KeysTake)
             Down.Add(key);
@@ -54,7 +66,7 @@ internal sealed class FakeStepIo : IStepIo
 
     public void KeyUp(Keys key)
     {
-        Log.Add($"up {key}");
+        Note($"up {key}");
         Down.Remove(key);
     }
 
@@ -62,15 +74,15 @@ internal sealed class FakeStepIo : IStepIo
 
     public void Press(bool right, int holdMs)
     {
-        Log.Add(right ? "press R" : "press L");
+        Note(right ? "press R" : "press L");
         _pressUntil = Ms + holdMs;
     }
 
     public bool PressHeld => Ms < _pressUntil;
 
-    public void Wander(int stop) => Log.Add($"wander {stop + 1}");
+    public void Wander(int stop) => Note($"wander {stop + 1}");
 
-    public void StopWander() => Log.Add("stop wandering");
+    public void StopWander() => Note("stop wandering");
 
     public void LetGoAfterPress(IReadOnlyList<Keys> keys)
     {
@@ -79,7 +91,7 @@ internal sealed class FakeStepIo : IStepIo
 
         if (PressHeld)
         {
-            Log.Add($"let go after the press: {string.Join("+", keys)}");
+            Note($"let go after the press: {string.Join("+", keys)}");
             _afterPress.AddRange(keys);
             return;
         }
@@ -122,7 +134,11 @@ internal static class StepCases
 
     private static StepPlan Plan(params Stop[] stops) =>
         StepPlan.Make(new MousePointer(null, new Random(20261105)) { MinTravelMs = 60f, TravelMsPerRootPx = 6f, ArcPercent = 7f },
-            new Vector2(100f, 100f), stops, true, () => 64, () => 72, _ => 60f, out _);
+            new Vector2(100f, 100f), stops, true, new StepPlan.Timings(() => 64, () => 72, () => 40, () => 30), _ => 60f, out _);
+
+    private static Stop Here(params StepEvent[] events) => new(default, new Vector2(float.NaN, float.NaN), events, false, false, false, -1);
+
+    private static StepEvent On(Keys key, bool down) => new(key, down, StepAnchor.OnArrival);
 
     internal static int Run()
     {
@@ -324,6 +340,104 @@ internal static class StepCases
                 "shift down on arrival, up as the plan ends",
                 $"ended {runner.Phase}, did {string.Join(", ", io.Log)}",
                 "a caller that forgets the Up must not leave shift down for the player");
+        }
+
+        // 11. ctrl+A then ctrl+V where the cursor is, after a click: in the order given, paced like typing.
+        {
+            var plan = Plan(At(300, 200, Click),
+                Here(On(Ctrl, true), On(Keys.A, true), On(Keys.A, false), On(Keys.V, true), On(Keys.V, false), On(Ctrl, false)));
+            var keys = plan.Timeline().Where(p => p.Stop == 1).ToList();
+            var times = keys.Select(p => p.AtMs).ToArray();
+            var ok = times.SequenceEqual([0f, 72f, 112f, 142f, 182f, 254f]) &&
+                     keys.Select(p => p.Order).SequenceEqual([0, 1, 2, 3, 4, 5]) &&
+                     keys.All(p => p.Where == plan.Journeys[0].To) &&
+                     plan.Journeys[1].From == plan.Journeys[1].To && plan.Journeys[1].To == plan.Journeys[0].To &&
+                     plan.Timeline().Where(p => p.Stop == 0).Select(p => p.AtMs).SequenceEqual([0f, 64f]);
+
+            Report(ok, "11 ctrl+A, ctrl+V go out in order, a hold within each key and a gap between",
+                "ctrl 0, A down 72 (modifier lead), A up 112 (+40 hold), V down 142 (+30 gap), V up 182, ctrl up 254 (+72); " +
+                "all on the click's point, drawn 0-5 in order; the click itself as before",
+                $"{string.Join(", ", keys.Select(p => $"{StepPlan.KeyLabel(p.Input)}{(p.Down ? "v" : "^")} {p.AtMs} #{p.Order}"))}; " +
+                $"click {string.Join("/", plan.Timeline().Where(p => p.Stop == 0).Select(p => p.AtMs))}",
+                "keys sharing an anchor went out in one step - a chord, not typing - and were drawn on one spot");
+        }
+
+        // 12. A keys-only stop does not move the cursor: no journey, keys straight away.
+        {
+            var plan = Plan(Here(On(Keys.Escape, true), On(Keys.Escape, false), On(Keys.Space, true), On(Keys.Space, false)));
+            var io = new FakeStepIo();
+            var runner = new StepRunner(plan, io);
+
+            io.Run(runner, 300);
+            var ok = plan.Journeys[0].To == new Vector2(100f, 100f) && !io.Log.Any(l => l.StartsWith("travel")) &&
+                     io.Log.SequenceEqual(["down Escape", "up Escape", "down Space", "up Space"]) &&
+                     io.When("down Escape") == 1 && io.When("down Space") - io.When("up Escape") == 30 &&
+                     runner.Phase == StepPhase.Done;
+
+            Report(ok, "12 A keys-only stop leaves the cursor where it is",
+                "planned at the cursor (100,100); no travel; Escape tapped, a 30ms gap, Space tapped; done",
+                $"at ({plan.Journeys[0].To.X},{plan.Journeys[0].To.Y}), did {string.Join(", ", io.Log.Select((l, i) => $"{l}@{io.At[i]}"))}, ended {runner.Phase}",
+                "a key pressed in a stash or a panel needs no journey, and a move there would be one the player could see for nothing");
+        }
+
+        // 13. A lone Down stays held: ctrl down with A at one stop, through a Hold, let go after V at the next.
+        {
+            var plan = Plan(Here(On(Ctrl, true), On(Keys.A, true), On(Keys.A, false)) with { Hold = true },
+                Here(On(Keys.V, true), On(Keys.V, false), On(Ctrl, false)));
+            var io = new FakeStepIo();
+            var runner = new StepRunner(plan, io);
+
+            io.Run(runner, 500);
+            var held = runner.Phase == StepPhase.Holding && io.Down.Contains(Ctrl) && !io.Down.Contains(Keys.A);
+            runner.Proceed();
+            io.Run(runner, 500);
+            var ok = held && runner.Phase == StepPhase.Done && !io.Down.Contains(Ctrl) &&
+                     io.Log.SequenceEqual(["down LControlKey", "down A", "up A", "down V", "up V", "up LControlKey"]) &&
+                     plan.HeldSpans().Any(s => s.Key == Ctrl && s.FromStop == 0 && s.ToStop == 1);
+
+            Report(ok, "13 A key with no Up at its anchor stays held",
+                "ctrl still down through the Hold, A up; then V and ctrl up; ctrl drawn held across both stops",
+                $"held {held}, did {string.Join(", ", io.Log)}, ended {runner.Phase}",
+                "a key that goes down stays down until an Up for it: sequencing changes when keys go, not how long they stay");
+        }
+
+        // 14. The runner follows the timeline: a click, then ctrl+A, ctrl+V once the button is up, at the planned paces.
+        {
+            var plan = Plan(At(300, 200, Click),
+                Here(On(Ctrl, true), On(Keys.A, true), On(Keys.A, false), On(Ctrl, false),
+                    On(Ctrl, true), On(Keys.V, true), On(Keys.V, false), On(Ctrl, false)));
+            var io = new FakeStepIo();
+            var runner = new StepRunner(plan, io);
+
+            io.Run(runner, 1500);
+            var keys = io.Log.Select((l, i) => (l, t: io.At[i])).Where(x => x.l.StartsWith("down") || x.l.StartsWith("up")).ToList();
+            var gaps = keys.Zip(keys.Skip(1), (a, b) => b.t - a.t).ToArray();
+            var pressAt = io.When("press L");
+            var ok = io.Log.Count(l => l.StartsWith("travel")) == 1 && keys.Count == 8 &&
+                     keys.Select(x => x.l).SequenceEqual(["down LControlKey", "down A", "up A", "up LControlKey",
+                         "down LControlKey", "down V", "up V", "up LControlKey"]) &&
+                     keys[0].t >= pressAt + 64 && gaps.SequenceEqual([72d, 40d, 72d, 30d, 72d, 40d, 72d]) &&
+                     runner.Phase == StepPhase.Done;
+
+            Report(ok, "14 The runner sends the keys at the planned paces, after the click before is done",
+                "one travel; press, and once its 64ms are up: ctrl, +72 A, +40 A up, +72 ctrl up, +30 ctrl, +72 V, +40 V up, +72 ctrl up",
+                $"press at {pressAt}; {string.Join(", ", keys.Select(x => $"{x.l}@{x.t}"))}; ended {runner.Phase}",
+                "typing over a held button is not what a hand does, and the drawn timeline is only worth having if it is what happens");
+        }
+
+        // 15. Several keys at one anchor wait for a modifier that has not taken: no bare A, the plan dropped.
+        {
+            var plan = Plan(Here(On(Ctrl, true), On(Keys.A, true), On(Keys.A, false), On(Ctrl, false)));
+            var io = new FakeStepIo { KeysTake = false };
+            var runner = new StepRunner(plan, io);
+
+            io.Run(runner, 600);
+            var ok = runner.Phase == StepPhase.Dropped && !io.Log.Contains("down A") && runner.Why.Contains("would not read as down");
+
+            Report(ok, "15 No typed key under a modifier that has not taken",
+                "dropped, A never pressed",
+                $"ended {runner.Phase} ({runner.Why}), did {string.Join(", ", io.Log)}",
+                "ctrl+A sent as a bare A types an A into the search box");
         }
 
         Console.WriteLine($"{cases - failed}/{cases} match");

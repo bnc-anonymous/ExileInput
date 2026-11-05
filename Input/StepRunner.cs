@@ -39,8 +39,10 @@ internal interface IStepIo
 
 /// <summary>
 /// Runs a step plan a little each tick: the journey to each stop, its keys and button at their anchors, a wait for the
-/// caller at a Gate or a Hold, and on to the next. Keys it pressed are its own until an Up for them; a drop - the caller
-/// abandoning, a stop, the cursor given back - lets go of all of them, after any button is up. See docs/plan-steps.md.
+/// caller at a Gate or a Hold, and on to the next. Several keys at one anchor go out in the order given, each its pace
+/// after the one before (StepPlan.Paces); a Here stop has no journey. Keys it pressed are its own until an Up for them; a
+/// drop - the caller abandoning, a stop, the cursor given back - lets go of all of them, after any button is up. See
+/// docs/plan-steps.md.
 /// </summary>
 internal sealed class StepRunner
 {
@@ -55,6 +57,15 @@ internal sealed class StepRunner
     private bool _pressed;
     private TimeSpan _since;
     private TimeSpan? _upAt;
+    private bool _leaving;
+    private TimeSpan _setOffAt;
+    private int _hereLeadMs;
+
+    /// <summary>The anchor whose keys are going out, how many have, when the last did, and since when one has waited on a modifier.</summary>
+    private StepAnchor? _sequence;
+    private int _sequenceNext;
+    private TimeSpan _sequenceLast;
+    private TimeSpan? _confirmSince;
 
     /// <summary>How long the keys a click waits on may take to read as down before the plan is dropped.</summary>
     public int ConfirmMs { get; set; } = 200;
@@ -150,22 +161,39 @@ internal sealed class StepRunner
             case StepPhase.Travelling:
                 if (!_setOff)
                 {
+                    // Keys where the cursor is wait for the click before to be done with: typing over a held button is
+                    // not what a hand does.
+                    if (stop.Here && _io.PressHeld)
+                        return false;
+
                     foreach (var e in stop.KeysAt(StepAnchor.BeforeArrival).Where(e => !e.Down))
                         Up(e.Input);
 
                     // Keys already down - held from an earlier stop - are not pressed again on the way.
                     var lead = stop.LeadKeys.Where(k => !_held.Contains(k)).Distinct().ToArray();
 
+                    _setOff = true;
+                    _setOffAt = now;
+
+                    // A Here stop moves nowhere: its lead keys go down now, and it arrives their lead later.
+                    if (stop.Here)
+                    {
+                        foreach (var key in lead)
+                            Down(key);
+
+                        _hereLeadMs = lead.Length > 0 ? journey.LeadMs : 0;
+                        return true;
+                    }
+
                     _io.Travel(Index, lead);
 
                     foreach (var key in lead)
                         _held.Add(key);
 
-                    _setOff = true;
                     return false;
                 }
 
-                if (!_io.Arrived())
+                if (stop.Here ? (now - _setOffAt).TotalMilliseconds < _hereLeadMs : !_io.Arrived())
                     return false;
 
                 Phase = stop.Gate ? StepPhase.AtGate : StepPhase.Pressing;
@@ -178,13 +206,8 @@ internal sealed class StepRunner
             case StepPhase.Pressing:
                 if (!_arrivalDone)
                 {
-                    foreach (var e in stop.KeysAt(StepAnchor.OnArrival))
-                    {
-                        if (e.Down)
-                            Down(e.Input);
-                        else
-                            Up(e.Input);
-                    }
+                    if (!Sequence(stop, StepAnchor.OnArrival, now))
+                        return false;
 
                     _arrivalDone = true;
                     _since = now;
@@ -221,13 +244,8 @@ internal sealed class StepRunner
                         return false;
                 }
 
-                foreach (var e in stop.KeysAt(StepAnchor.AfterPress))
-                {
-                    if (e.Down)
-                        Down(e.Input);
-                    else
-                        Up(e.Input);
-                }
+                if (!Sequence(stop, StepAnchor.AfterPress, now))
+                    return false;
 
                 if (stop.Hold)
                 {
@@ -243,17 +261,18 @@ internal sealed class StepRunner
                 return true;
 
             case StepPhase.Leaving:
-                if (stop.Wander)
-                    _io.StopWander();
-
-                // As the next journey sets off: a key let go here comes up with the move, not before it.
-                foreach (var e in stop.KeysAt(StepAnchor.OnLeave))
+                if (!_leaving)
                 {
-                    if (e.Down)
-                        Down(e.Input);
-                    else
-                        Up(e.Input);
+                    if (stop.Wander)
+                        _io.StopWander();
+
+                    _leaving = true;
                 }
+
+                // As the next journey sets off: a key let go here comes up with the move, not before it. Several go out
+                // at their paces first, and the move sets off with the last.
+                if (!Sequence(stop, StepAnchor.OnLeave, now))
+                    return false;
 
                 _plan.MarkDone(Index);
                 Index++;
@@ -281,6 +300,67 @@ internal sealed class StepRunner
         _arrivalDone = false;
         _pressed = false;
         _upAt = null;
+        _leaving = false;
+        _sequence = null;
+    }
+
+    /// <summary>
+    /// The stop's keys at this anchor, in the order given, each once its pace has passed since the one before; true once
+    /// all are out. One key alone goes at once, as ever. In a sequence, a key that is not a modifier waits, as a click does,
+    /// for the modifiers held to read as down - ctrl+A sent as a bare A types an A - and the plan is dropped if they do
+    /// not within ConfirmMs.
+    /// </summary>
+    private bool Sequence(Stop stop, StepAnchor anchor, TimeSpan now)
+    {
+        if (_sequence != anchor)
+        {
+            _sequence = anchor;
+            _sequenceNext = 0;
+            _sequenceLast = now;
+            _confirmSince = null;
+        }
+
+        var events = stop.Events;
+        var paces = _plan.Paces[Index];
+        var count = events.Count(e => !e.IsButton && e.Anchor == anchor);
+        var k = 0;
+
+        for (var i = 0; i < events.Length; i++)
+        {
+            var e = events[i];
+
+            if (e.IsButton || e.Anchor != anchor || k++ < _sequenceNext)
+                continue;
+
+            if ((now - _sequenceLast).TotalMilliseconds < paces[i])
+                return false;
+
+            if (count > 1 && e.Down && !StepPlan.IsModifier(e.Input))
+            {
+                var untaken = _held.Where(h => StepPlan.IsModifier(h) && !_io.KeyIsDown(h)).ToArray();
+
+                if (untaken.Length > 0)
+                {
+                    _confirmSince ??= now;
+
+                    if ((now - _confirmSince.Value).TotalMilliseconds > ConfirmMs)
+                        Drop($"{string.Join("+", untaken)} would not read as down");
+
+                    return false;
+                }
+            }
+
+            if (e.Down)
+                Down(e.Input);
+            else
+                Up(e.Input);
+
+            _sequenceNext++;
+            _sequenceLast = now;
+            _confirmSince = null;
+        }
+
+        return true;
     }
 
     private void Down(Keys key)

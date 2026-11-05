@@ -124,6 +124,31 @@ public class ExileInputSettings : ISettings
     [Menu("Modifier Timing Longest (ms)", "The longest time a modifier goes down before a click and up after it.")]
     public RangeNode<int> ModifierTimingLongestMs { get; set; } = new RangeNode<int>(100, 0, 300);
 
+    [Menu("Key Hold Shortest (ms)",
+        "When a plugin plans several keys at one moment of a step - ctrl+A then ctrl+V, say -\n" +
+        "they go out in order, paced like typing. This is the shortest a key is held down\n" +
+        "between its press and its release. Each is drawn afresh between Shortest and Longest,\n" +
+        "most often near Usual.")]
+    public RangeNode<int> KeyHoldShortestMs { get; set; } = new RangeNode<int>(30, 0, 300);
+
+    [Menu("Key Hold Usual (ms)", "The most common time a key typed in a planned step is held down.")]
+    public RangeNode<int> KeyHoldUsualMs { get; set; } = new RangeNode<int>(40, 0, 300);
+
+    [Menu("Key Hold Longest (ms)", "The longest a key typed in a planned step is held down.")]
+    public RangeNode<int> KeyHoldLongestMs { get; set; } = new RangeNode<int>(60, 0, 300);
+
+    [Menu("Key Gap Shortest (ms)",
+        "The shortest time between one key typed in a planned step coming up and the next going\n" +
+        "down. A modifier pressed before the keys it holds gets Modifier Timing instead, and\n" +
+        "so does one let go after them.")]
+    public RangeNode<int> KeyGapShortestMs { get; set; } = new RangeNode<int>(25, 0, 300);
+
+    [Menu("Key Gap Usual (ms)", "The most common time between one key typed in a planned step and the next.")]
+    public RangeNode<int> KeyGapUsualMs { get; set; } = new RangeNode<int>(40, 0, 300);
+
+    [Menu("Key Gap Longest (ms)", "The longest time between one key typed in a planned step and the next.")]
+    public RangeNode<int> KeyGapLongestMs { get; set; } = new RangeNode<int>(70, 0, 300);
+
     [Menu("Planned Clicks: Show Buttons",
         "When a plugin asks for its planned clicks to be drawn: L or R at each click, for the\n" +
         "left or right button - bright where it goes down, fainter beside it where it comes up.")]
@@ -337,6 +362,12 @@ public class ExileInputSettings : ISettings
     internal (int Least, int Usual, int Most) UsedModifierTiming =>
         UsedSpread(ModifierTimingShortestMs, ModifierTimingUsualMs, ModifierTimingLongestMs, 3);
 
+    /// <summary>How long a key typed in a planned step is held down, as used. See StepPlan.PacesOf.</summary>
+    internal (int Least, int Usual, int Most) UsedKeyHold => UsedSpread(KeyHoldShortestMs, KeyHoldUsualMs, KeyHoldLongestMs, 6);
+
+    /// <summary>How long between one key typed in a planned step coming up and the next going down, as used.</summary>
+    internal (int Least, int Usual, int Most) UsedKeyGap => UsedSpread(KeyGapShortestMs, KeyGapUsualMs, KeyGapLongestMs, 9);
+
     private void DrawSeed()
     {
         var seed = Seed;
@@ -380,6 +411,8 @@ public class ExileInputSettings : ISettings
         ImGuiNET.ImGui.TextUnformatted($"  Click Hold (ms): {hold.Least} / {hold.Usual} / {hold.Most}" +
                             (Seed == 0 ? "" : "   (shortest / usual / longest, each up to 5% from its slider)"));
         ImGuiNET.ImGui.TextUnformatted($"  Modifier Timing (ms): {modifier.Least} / {modifier.Usual} / {modifier.Most}");
+        ImGuiNET.ImGui.TextUnformatted($"  Key Hold (ms): {UsedKeyHold.Least} / {UsedKeyHold.Usual} / {UsedKeyHold.Most}");
+        ImGuiNET.ImGui.TextUnformatted($"  Key Gap (ms): {UsedKeyGap.Least} / {UsedKeyGap.Usual} / {UsedKeyGap.Most}");
     }
 
     /// <summary>Every slider and switch back to its default. The seed is left as it is.</summary>
@@ -404,6 +437,12 @@ public class ExileInputSettings : ISettings
         ModifierTimingShortestMs.Value = defaults.ModifierTimingShortestMs.Value;
         ModifierTimingUsualMs.Value = defaults.ModifierTimingUsualMs.Value;
         ModifierTimingLongestMs.Value = defaults.ModifierTimingLongestMs.Value;
+        KeyHoldShortestMs.Value = defaults.KeyHoldShortestMs.Value;
+        KeyHoldUsualMs.Value = defaults.KeyHoldUsualMs.Value;
+        KeyHoldLongestMs.Value = defaults.KeyHoldLongestMs.Value;
+        KeyGapShortestMs.Value = defaults.KeyGapShortestMs.Value;
+        KeyGapUsualMs.Value = defaults.KeyGapUsualMs.Value;
+        KeyGapLongestMs.Value = defaults.KeyGapLongestMs.Value;
         PlanShowButtons.Value = defaults.PlanShowButtons.Value;
         PlanShowModifiers.Value = defaults.PlanShowModifiers.Value;
         PlanShowNumbers.Value = defaults.PlanShowNumbers.Value;

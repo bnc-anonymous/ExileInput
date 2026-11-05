@@ -28,7 +28,7 @@ public partial class ExileInput
         var b = GameController.PluginBridge;
 
         // Stops flattened to arrays, as PlanClicks crosses: each stop's events are the next eventCounts[i] of the event
-        // arrays; flags per stop are 1 Gate, 2 Hold, 4 Wander. See ExileInputClient.PlanSteps.
+        // arrays; flags per stop are 1 Gate, 2 Hold, 4 Wander; a NaN point with an empty rectangle is keys where the cursor is. See ExileInputClient.PlanSteps.
         b.SaveMethod("ExileInput.PlanSteps",
             (string who, RectangleF[] rects, Vector2[] points, int[] eventCounts, Keys[] eventInputs, bool[] eventDowns,
                 int[] eventAnchors, int[] flags, int[] shortestMoveMs, bool show) =>
@@ -100,8 +100,7 @@ public partial class ExileInput
         }
 
         var shortest = stops.Select(s => s.ShortestMoveMs).ToArray();
-        var plan = StepPlan.Make(PointerFor(who), Cursor(), stops, show, () => HumanTiming.Ms(Settings.UsedClickHold),
-            () => HumanTiming.Ms(Settings.UsedModifierTiming), ShortestOf(shortest), out _);
+        var plan = StepPlan.Make(PointerFor(who), Cursor(), stops, show, StepTimings(), ShortestOf(shortest), out _);
 
         if (plan == null)
             return false;
@@ -132,11 +131,15 @@ public partial class ExileInput
         if (stops.Count == 0)
             return true;
 
-        running.Plan.Extend(PointerFor(who), stops, () => HumanTiming.Ms(Settings.UsedClickHold),
-            () => HumanTiming.Ms(Settings.UsedModifierTiming), ShortestOf(stops.Select(s => s.ShortestMoveMs).ToArray()));
+        running.Plan.Extend(PointerFor(who), stops, StepTimings(), ShortestOf(stops.Select(s => s.ShortestMoveMs).ToArray()));
         running.Runner.Extended();
         return true;
     }
+
+    /// <summary>A step plan's timings, each drawn afresh: Click Hold, Modifier Timing, Key Hold and Key Gap.</summary>
+    private StepPlan.Timings StepTimings() => new(() => HumanTiming.Ms(Settings.UsedClickHold),
+        () => HumanTiming.Ms(Settings.UsedModifierTiming), () => HumanTiming.Ms(Settings.UsedKeyHold),
+        () => HumanTiming.Ms(Settings.UsedKeyGap));
 
     private bool ProceedSteps(string who) =>
         _lease.Held(who) && _steps.TryGetValue(who, out var running) && running.Runner.Proceed();
@@ -253,7 +256,8 @@ public partial class ExileInput
             var rect = plan.Stops[stop].Rect;
             var radius = plan.Stops[stop].PointGiven || rect.Width <= 0 ? 4f : Math.Max(2f, Math.Min(rect.Width, rect.Height) * 0.15f);
 
-            plugin.PointerFor(who).LoiterOnArrival(journey.To, radius);
+            // A Here stop idles round wherever the cursor is, not where the plan guessed it would be.
+            plugin.PointerFor(who).LoiterOnArrival(plan.Stops[stop].Here ? plugin.Cursor() : journey.To, radius);
         }
 
         public void StopWander() => plugin.PointerFor(who).StopLoitering();

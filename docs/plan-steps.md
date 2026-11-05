@@ -121,6 +121,23 @@ arrival and letting go on leaving; up marks where the release happens. The runne
 buttons (as `StrokeCases`): Gate and Hold waiting for Proceed, player input dropping the plan and letting keys go,
 Abandon, and Release mid-press keeping a key down until the button is up.
 
+## Key sequences (added 2026-11-05)
+
+Several keys at one anchor (OnArrival, AfterPress, OnLeave) go out **in the order of the stop's Events**, each its pace
+after the one before: a **Key Hold** between a key's Down and its Up, a **Key Gap** between one key's Up and the next
+key's Down (and any other pair), and **Modifier Timing** after a modifier's Down before the first key that is not one,
+and before a modifier's Up after a key's Up. The paces are drawn when the plan is made (`StepPlan.Paces`), so the
+timeline is what the runner does: a button goes down once the arrival keys are out, AfterPress starts after the button
+and Modifier Timing as before, and OnLeave after AfterPress's keys; the next journey sets off with the last OnLeave key.
+One key at an anchor goes at once, as before; BeforeArrival's keys still go down together with the lead. A key with no
+Up stays held, as ever. In a sequence, a key that is not a modifier waits for the modifiers held to read as down, and
+the plan is dropped if they do not within the confirm time - a ctrl+A sent as a bare A types an A.
+
+A stop with **neither a point nor a rectangle** (a NaN point, an empty rectangle: `PlannedStop.Here`) is keys where the
+cursor is: no journey, nothing moved; it waits for a click before it to be done with, and its BeforeArrival keys go
+down at once with their lead before its arrival. It is planned, and drawn, at the place the stop before left the cursor.
+Keys at one anchor are drawn side by side in order (C A A V V C), bright down and dim up.
+
 ## Decisions (2026-11-05)
 
 1. **ExileInput runs the stops**; the caller steps in only at Gates and Holds.

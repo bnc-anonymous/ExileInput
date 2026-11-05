@@ -143,6 +143,19 @@ loads); `Proceed()` moves it on, `StepWhere()` says where it is, `AbandonSteps()
 plan ends, is dropped or the cursor is given back is let go, after any button is up. Drawn like a click plan, with each
 event where it happens, a thin line for a key held, `?` at a Gate and `||` at a Hold.
 
+Several keys at one anchor go out **in the order given, paced like typing**: a Key Hold between a key's Down and its
+Up, a Key Gap between one key's Up and the next one's Down (both settings, drawn afresh each time like Click Hold), and
+Modifier Timing after ctrl goes down before the first key it holds and before it comes up after the last. A stop with
+neither a point nor a rectangle (`PlannedStop.Here`, a NaN point) does not move the cursor at all, so keyboard input
+can be planned and drawn as steps; `PlannedStop.Typed` writes out a chord:
+
+```csharp
+_input.PlanSteps([
+    PlannedStop.At(searchBox, new StepEvent(Keys.LButton, true, StepAnchor.OnArrival)),
+    PlannedStop.Here([.. PlannedStop.Typed([Keys.LControlKey], Keys.A), .. PlannedStop.Typed([Keys.LControlKey], Keys.V)]),
+], show: true);
+```
+
 The click calls are unchanged. A caller has one plan at a time: a step plan replaces a click plan and the other way
 round, and a move, drag or loiter of the caller's own drops its step plan. See `docs/plan-steps.md`.
 

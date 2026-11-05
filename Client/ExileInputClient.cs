@@ -650,12 +650,17 @@ public sealed class ExileInputClient
 
     /// <summary>
     /// A key or a button going down or up at an anchor. Buttons are Keys.LButton and Keys.RButton: a button going down is
-    /// a click, brought up after the Click Hold, on arrival whatever anchor it names; a button's Up is implied.
+    /// a click, brought up after the Click Hold, on arrival whatever anchor it names; a button's Up is implied. Several
+    /// keys at one anchor (OnArrival, AfterPress or OnLeave) go out in the order given, paced like typing: a Key Hold
+    /// between a key's Down and its Up, a Key Gap between one key's Up and the next one's Down, and Modifier Timing after a
+    /// modifier's Down before the first key it holds and before its Up after the last. A key with no Up stays held.
+    /// BeforeArrival's keys go down together, with the lead.
     /// </summary>
     public readonly record struct StepEvent(Keys Input, bool Down, StepAnchor Anchor);
 
     /// <summary>
-    /// One stop: a journey to the point (where given, not NaN) or else the rectangle, and its events. Gate: the plan waits
+    /// One stop: a journey to the point (where given, not NaN) or else the rectangle, and its events. With neither - a NaN
+    /// point and an empty rectangle, as PlannedStop.Here makes - no journey: keys where the cursor is. Gate: the plan waits
     /// for Proceed before the arrival events - to check what is under the cursor. Hold: it waits for Proceed after them,
     /// keys held - until a price loads, say. Wander: idle round the target while held rather than stay still.
     /// ShortestMoveMs: -1 for the input plugin's own.
@@ -668,6 +673,23 @@ public sealed class ExileInputClient
 
         /// <summary>A stop on a point.</summary>
         public static PlannedStop On(Vector2 point, params StepEvent[] events) => new(default, point, events);
+
+        /// <summary>
+        /// Keys where the cursor is, with no journey: a NaN point and no rectangle. Waits for a click before it to be
+        /// done with. Needs an input plugin with key sequences; an older one turns the plan down (false).
+        /// </summary>
+        public static PlannedStop Here(params StepEvent[] events) => new(default, new Vector2(float.NaN, float.NaN), events);
+
+        /// <summary>
+        /// Keys typed as a chord: the modifiers down, then each key down and up in turn, then the modifiers up, all on
+        /// arrival - Typed([Keys.LControlKey], Keys.A) is ctrl+A, Typed([], Keys.Escape) a tap of Escape.
+        /// </summary>
+        public static StepEvent[] Typed(Keys[] modifiers, params Keys[] keys) =>
+        [
+            .. modifiers.Select(m => new StepEvent(m, true, StepAnchor.OnArrival)),
+            .. keys.SelectMany(k => new[] { new StepEvent(k, true, StepAnchor.OnArrival), new StepEvent(k, false, StepAnchor.OnArrival) }),
+            .. Enumerable.Reverse(modifiers).Select(m => new StepEvent(m, false, StepAnchor.OnArrival)),
+        ];
     }
 
     /// <summary>The stop in hand, the phase, and why the plan was dropped ("" otherwise).</summary>
@@ -689,6 +711,12 @@ public sealed class ExileInputClient
     /// ], show: true);
     /// // ... once the price has loaded:
     /// _input.Proceed();
+    ///
+    /// // Click a search box, then ctrl+A, ctrl+V where the cursor is - in order, paced like typing, each drawn.
+    /// _input.PlanSteps([
+    ///     PlannedStop.At(searchBox, new StepEvent(Keys.LButton, true, StepAnchor.OnArrival)),
+    ///     PlannedStop.Here([.. PlannedStop.Typed([Keys.LControlKey], Keys.A), .. PlannedStop.Typed([Keys.LControlKey], Keys.V)]),
+    /// ], show: true);
     /// </code>
     /// </summary>
     public bool PlanSteps(PlannedStop[] stops, bool show)
