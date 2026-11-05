@@ -1353,6 +1353,39 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         _held = null;
     }
 
+    /// <summary>How long an opening may take before it is given up as hung: a good one takes well under a second.</summary>
+    private static readonly TimeSpan OpeningGivesUpAfter = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The warning that hardware input switched itself off: a red banner across the top of the screen, there until the box
+    /// is ticked again or the warning dismissed in the settings - a change this large is not left to a log line.
+    /// </summary>
+    private void DrawSwitchedOff()
+    {
+        if (Settings.Advanced.UseHardwareInput.Value || Settings.Advanced.SwitchedOff is not { Length: > 0 } off)
+            return;
+
+        var window = GameController.Window.GetWindowRectangleTimeCache;
+        string[] lines =
+        [
+            "HARDWARE INPUT SWITCHED ITSELF OFF - input is going through Windows",
+            off,
+            "Tick Use Hardware Input (ExileInput > Advanced) to try again, or dismiss this there.",
+        ];
+        var line = Graphics.MeasureText("M").Y + 4f;
+        var width = lines.Max(l => Graphics.MeasureText(l).X) + 40f;
+        var box = new RectangleF(window.Width / 2f - width / 2f, 40f, width, line * lines.Length + 20f);
+
+        Graphics.DrawBox(box, new SharpDX.Color(120, 0, 0, 230));
+        Graphics.DrawFrame(box, new SharpDX.Color(255, 80, 80, 255), 2);
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            Graphics.DrawText(lines[i], new Vector2(window.Width / 2f, box.Y + 10f + i * line),
+                i == 0 ? SharpDX.Color.White : new SharpDX.Color(255, 200, 200, 255), ExileCore.Shared.Enums.FontAlign.Center);
+        }
+    }
+
     /// <summary>Who held the cursor last tick, so an expiry can be noticed and tidied after.</summary>
     private string _held;
 
@@ -1364,6 +1397,13 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     /// </summary>
     private void StepBoards()
     {
+        // An opening that has hung is a failure like any other: a stuck Debug Probe's port can hang its own close, and
+        // the box then said "Looking for the boards..." for good with nothing wrong reported (2026-11-05).
+        if (Boards.Opening && DateTime.UtcNow - Boards.OpeningSince > OpeningGivesUpAfter)
+            Boards.GiveUpOpening($"the boards did not answer within {OpeningGivesUpAfter.TotalSeconds:0} s - a Debug Probe may be stuck: unplug it and plug it back in");
+
+        // Not found, not answering or lost: switched off at once, said on screen until the player answers it. Not tried
+        // again quietly - the player wants to know at once that hardware input is not working.
         if (Boards.TakeFailure() is { } why)
         {
             Reroute.Uninstall();
@@ -1373,11 +1413,18 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
             if (Settings.Advanced.UseHardwareInput.Value)
             {
                 Settings.Advanced.UseHardwareInput.Value = false;
+                Settings.Advanced.SwitchedOff = $"{DateTime.Now:HH:mm} - {why}";
                 _SaveSettings();
             }
 
-            LogError($"ExileInput: {why}", 10f);
+            LogError($"ExileInput: hardware input switched itself off - {why}", 30f);
             return;
+        }
+
+        if (Boards.Open && Settings.Advanced.SwitchedOff.Length > 0)
+        {
+            Settings.Advanced.SwitchedOff = "";
+            _SaveSettings();
         }
 
         if (Settings.Advanced.UseHardwareInput.Value && Boards.Closed)
@@ -1629,6 +1676,8 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     private void RenderGated()
     {
         var now = DateTime.UtcNow;
+
+        DrawSwitchedOff();
 
         _fading.RemoveAll(f => now - f.Since >= FadeFor);
 

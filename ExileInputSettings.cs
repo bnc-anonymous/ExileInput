@@ -432,6 +432,12 @@ public class AdvancedSettings
     [IgnoreMenu]
     public ToggleNode RerouteOtherInput { get; set; } = new ToggleNode(false);
 
+    /// <summary>
+    /// Why hardware input switched itself off, with when, until the player ticks it again or dismisses it; empty otherwise.
+    /// Saved, so the warning on screen outlives a restart. See ExileInput.StepBoards and DrawSwitchedOff.
+    /// </summary>
+    public string SwitchedOff { get; set; } = "";
+
     /// <summary>Both checkboxes, drawn here so ticking hardware input checks for the boards first.</summary>
     [JsonIgnore]
     public CustomNode HardwareInputUi { get; set; }
@@ -462,6 +468,16 @@ public class AdvancedSettings
         }
 
         Help("Send input through the hardware-input boards.");
+
+        if (!use && SwitchedOff is { Length: > 0 } off)
+        {
+            ImGuiNET.ImGui.PushStyleColor(ImGuiNET.ImGuiCol.Text, new System.Numerics.Vector4(1f, 0.35f, 0.35f, 1f));
+            ImGuiNET.ImGui.TextWrapped($"Switched itself off: {off}");
+            ImGuiNET.ImGui.PopStyleColor();
+
+            if (ImGuiNET.ImGui.Button("Dismiss the warning##exileInputSwitchedOff"))
+                SwitchedOff = "";
+        }
 
         if (use && Boards.Status is { Length: > 0 } status)
             ImGuiNET.ImGui.TextDisabled(status);

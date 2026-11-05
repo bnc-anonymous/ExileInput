@@ -94,6 +94,27 @@ internal static partial class Boards
         }
     }
 
+    /// <summary>When the opening in hand began, for the watchdog in StepBoards.</summary>
+    public static DateTime OpeningSince { get; private set; }
+
+    /// <summary>
+    /// Gives up an opening that has hung, as a failure saying why. The opening itself may still be stuck - a serial port
+    /// whose device stopped answering can hang its own close - and if it ever finishes it finds the state moved on and
+    /// lets go of what it opened.
+    /// </summary>
+    public static void GiveUpOpening(string why)
+    {
+        lock (Gate)
+        {
+            if (_state != State.Opening)
+                return;
+
+            _state = State.Closed;
+        }
+
+        Fail(why);
+    }
+
     /// <summary>Opens the boards in the background, if not open or opening. TakeFailure says if it fails.</summary>
     public static void Start()
     {
@@ -103,6 +124,7 @@ internal static partial class Boards
                 return;
 
             _state = State.Opening;
+            OpeningSince = DateTime.UtcNow;
         }
 
         Warning = "";
@@ -1057,6 +1079,12 @@ internal static partial class Boards
         "(its repository was not found beside this one when the plugin was built).";
 
     public static string Unavailable() => NotBuilt;
+
+    public static DateTime OpeningSince => DateTime.MinValue;
+
+    public static void GiveUpOpening(string why)
+    {
+    }
 
     public static void Start()
     {
