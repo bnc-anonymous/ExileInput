@@ -306,8 +306,20 @@ internal static class KeyWatch
         }
     }
 
+    /// <summary>
+    /// Keys that always pass, the player's or not: never counted as taking over, never dropped by a block, never swallowed
+    /// under a modifier. Caps Lock, which players bind as push-to-talk (Discord) and press mid-run; it makes no system
+    /// command with Ctrl, Shift or Alt, so passing it under one is safe. The hardware library exempts it already.
+    /// </summary>
+    internal static bool AlwaysPasses(int virtualKey) => virtualKey == VkCapital;
+
+    private const int VkCapital = 0x14;
+
     private static IntPtr Hook(int code, IntPtr message, IntPtr data)
     {
+        if (code >= 0 && AlwaysPasses((int)Marshal.PtrToStructure<KeyHookInfo>(data).VirtualKey))
+            return CallNextHookEx(IntPtr.Zero, code, message, data);
+
         // One of this plugin's modifiers down, or a swallowed key's up still to come: the player's key decided first. See KeyGuard.
         if (code >= 0 && (int)message is WmKeyDown or WmSysKeyDown or WmKeyUp or WmSysKeyUp && Guarding && GuardSwallows(message, data))
             return 1;
