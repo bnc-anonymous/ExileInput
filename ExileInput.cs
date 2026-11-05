@@ -1701,7 +1701,8 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         _fading.RemoveAll(f => now - f.Since >= FadeFor);
 
         // A queue given up fades as a whole; one replaced draws only its clicks already made, which fade by their own time.
-        var colours = new ClickPlan.Colours(Settings.PlanCurrentColour.Value, Settings.PlanLaterColour.Value, Settings.PlanDoneColour.Value);
+        var colours = new ClickPlan.Colours(Settings.PlanCurrentColour.Value, Settings.PlanLaterColour.Value, Settings.PlanDoneColour.Value,
+            Settings.PlanHeldColour.Value);
         var marks = new ClickPlan.Marks(Settings.PlanShowButtons.Value, Settings.PlanShowModifiers.Value, Settings.PlanShowNumbers.Value,
             Settings.PlanFadeOut.Value);
 

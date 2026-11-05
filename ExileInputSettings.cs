@@ -174,6 +174,11 @@ public class ExileInputSettings : ISettings
     [Menu("Planned Click Colour: Later", "The clicks still to come, and the ways to them.")]
     public ColorNode PlanLaterColour { get; set; } = new ColorNode(new SharpDX.Color(255, 210, 80, 255));
 
+    [Menu("Planned Click Colour: Held",
+        "A key a planned step holds while the plan is at its stop - alt held over a header while\n" +
+        "a price loads, say - drawn at the stop in this colour until it comes up.")]
+    public ColorNode PlanHeldColour { get; set; } = new ColorNode(new SharpDX.Color(60, 220, 60, 255));
+
     [Menu("Planned Click Colour: Done", "The clicks made, as they fade out over a second.")]
     public ColorNode PlanDoneColour { get; set; } = new ColorNode(new SharpDX.Color(170, 170, 170, 255));
 
@@ -450,6 +455,7 @@ public class ExileInputSettings : ISettings
         PlanCurrentColour.Value = defaults.PlanCurrentColour.Value;
         PlanLaterColour.Value = defaults.PlanLaterColour.Value;
         PlanDoneColour.Value = defaults.PlanDoneColour.Value;
+        PlanHeldColour.Value = defaults.PlanHeldColour.Value;
     }
 
     /// <summary>A seed at random: a cryptographic draw, never nought, which means none.</summary>

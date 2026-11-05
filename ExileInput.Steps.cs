@@ -211,7 +211,8 @@ public partial class ExileInput
             var pointer = PointerFor(holder);
 
             running.Plan.Draw(Graphics, colours, marks, running.Runner.Index, running.Runner.Travelling, 1f,
-                new ClickPlan.CursorTrail(pointer.Trail(), pointer.JourneyProgress));
+                new ClickPlan.CursorTrail(pointer.Trail(), pointer.JourneyProgress),
+                running.Runner.AtStop ? running.Runner.HeldKeys : null);
         }
     }
 

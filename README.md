@@ -141,7 +141,8 @@ down and one up, and Alt held over a header is Alt down on arrival and up on lea
 a **Gate** before its arrival events (check what is under the cursor), a **Hold** after them (keys held, until a price
 loads); `Proceed()` moves it on, `StepWhere()` says where it is, `AbandonSteps()` ends it. Anything still held when the
 plan ends, is dropped or the cursor is given back is let go, after any button is up. Drawn like a click plan, with each
-event where it happens, a thin line for a key held, `?` at a Gate and `||` at a Hold.
+event where it happens, a line in the held colour for a key held, and a key held at the stop the plan is at drawn there
+in the held colour (green by default) until it comes up; a Gate and a Hold draw nothing of their own.
 
 Several keys at one anchor go out **in the order given, paced like typing**: a Key Hold between a key's Down and its
 Up, a Key Gap between one key's Up and the next one's Down (both settings, drawn afresh each time like Click Hold), and

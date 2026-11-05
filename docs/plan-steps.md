@@ -98,8 +98,12 @@ mouse); hardware boards and Windows input are the output path as before (`InputO
 
 Per stop: its path (current one thick, others thin, done ones fading - as now), and a mark per event at the place on
 the path it happens: **bright for down, dim for up**; `L`/`R` for buttons, `C`/`S`/`A` (or the key's name) for keys.
-A key held across stops is drawn as a thin line beside the path from its Down to its Up, so "ctrl held for these five"
-reads at a glance. A Gate is drawn as `?` at the target, a Hold as `||`. The Plan Show settings (buttons, modifiers,
+A key held is drawn as a line beside the path, in the held colour and as thick as the current path, from its Down
+(along the rest of that approach) to its Up, so "ctrl held for these five"
+reads at a glance. A Gate and a Hold draw nothing of their own (the `?` and `||` first drawn were clutter on every
+click, 2026-11-05); instead, a key held at the stop the plan is at - Alt at a Hold - is drawn there in the **held
+colour** (Planned Click Colour: Held, green by default) until it comes up, where the usual dim up mark stays. The Plan
+Show settings (buttons, modifiers,
 numbers, fade) apply as now.
 
 ## Compatibility

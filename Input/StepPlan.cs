@@ -343,6 +343,34 @@ internal sealed class StepPlan
         return spans;
     }
 
+    /// <summary>
+    /// The way a held key's line takes: from its Down along the rest of that stop's approach where the Down is on it (a
+    /// lead partway along), through each later stop's journey, to its Up.
+    /// </summary>
+    internal List<Vector2> HeldLine(Held span)
+    {
+        var points = new List<Vector2> { span.From };
+        var path = Journeys[span.FromStop].Path;
+        const int samples = 32;
+        var nearest = 0;
+
+        for (var k = 1; k <= samples; k++)
+            if (Vector2.Distance(path.At(k / (float)samples), span.From) < Vector2.Distance(path.At(nearest / (float)samples), span.From))
+                nearest = k;
+
+        // On this approach and short of its end: the rest of the way to the stop.
+        if (nearest < samples && Vector2.Distance(path.At(nearest / (float)samples), span.From) < 3f)
+            for (var k = nearest + 1; k <= samples; k++)
+                points.Add(path.At(k / (float)samples));
+
+        for (var i = span.FromStop + 1; i <= span.ToStop; i++)
+            for (var k = 1; k <= 8; k++)
+                points.Add(Journeys[i].Path.At(k / 8f));
+
+        points.Add(span.To);
+        return points;
+    }
+
     /// <summary>When each stop was done with, so a done stop fades rather than vanishes. See Draw.</summary>
     private readonly Dictionary<int, DateTime> _doneAt = [];
 
@@ -356,13 +384,37 @@ internal sealed class StepPlan
     private int _drawnStops = -1;
 
     /// <summary>
+    /// The keys held at a stop, drawn there in the held colour until they come up: each held key's own Down mark at the
+    /// stop where it has one (Mark true, Where its mark's place), and otherwise its letter on the stop's point, to the right
+    /// of the stop's arrival keys - ctrl held from an earlier stop of a run, say. See Draw.
+    /// </summary>
+    internal List<(Keys Key, bool Mark, Vector2 Where)> HeldMarks(int stop, IReadOnlyCollection<Keys> held)
+    {
+        var marks = new List<(Keys, bool, Vector2)>();
+
+        if (held == null || stop < 0 || stop >= Stops.Count)
+            return marks;
+
+        // The drawing's own timeline while it is current, so a frame does not plan the timeline again.
+        var timeline = _timeline != null && _drawnStops == Stops.Count ? _timeline : Timeline();
+        var downs = timeline.Where(p => p.Stop == stop && p.Down && !p.Implied).Select(p => p.Input).ToHashSet();
+
+        foreach (var key in held)
+            marks.Add((key, downs.Contains(key), Journeys[stop].To));
+
+        return marks;
+    }
+
+    /// <summary>
     /// The paths and marks from the stop in hand on, at this opacity: each path (the current one bright, its way still
     /// ahead only while travelling, the cursor's trail behind it), each event where it happens - bright down, dim up; L or
-    /// R for buttons, C, S or A or the key's name for keys - a thin line beside the way for a key held, ? at a Gate and ||
-    /// at a Hold. Stops done with fade out over DoneFadeFor. Laid out as ClickPlan.Draw is, in its colours and marks.
+    /// R for buttons, C, S or A or the key's name for keys - and a line beside the way in the held colour for a key held.
+    /// Keys held at the stop in hand (heldHere: the runner's, while it is at the stop) are drawn there in the held colour
+    /// until they come up. A Gate and a Hold draw nothing of their own. Stops done with fade out over DoneFadeFor. Laid out
+    /// as ClickPlan.Draw is, in its colours and marks.
     /// </summary>
     public void Draw(Graphics graphics, ClickPlan.Colours colours, ClickPlan.Marks marks, int current, bool travelling,
-        float opacity = 1f, ClickPlan.CursorTrail? trail = null)
+        float opacity = 1f, ClickPlan.CursorTrail? trail = null, IReadOnlyCollection<Keys> heldHere = null)
     {
         if (_drawnStops != Stops.Count)
         {
@@ -392,21 +444,20 @@ internal sealed class StepPlan
             }
 
             DrawStop(graphics, i, state, colours.Later, marks, i == current, strength,
-                i == current && travelling ? trail : null);
+                i == current && travelling ? trail : null, i == current ? heldHere : null, Faded(colours.Held, 1f, strength));
         }
 
-        // The held keys, a thin line a little above the way, from where each goes down to where it comes up.
+        // The held keys, a line in the held colour as thick as the current path, a little above the way so the path still
+        // shows, from where each goes down - along the rest of that approach - to where it comes up. A key down and up on
+        // one spot (a typed key) has no line.
         foreach (var span in _held.Where(s => s.ToStop >= current))
         {
-            var colour = Faded(colours.Later, ClickPlan.UpStrength, opacity);
-            var points = new List<Vector2> { span.From };
+            var points = HeldLine(span);
 
-            for (var i = span.FromStop + 1; i <= span.ToStop; i++)
-                for (var k = 1; k <= 8; k++)
-                    points.Add(Journeys[i].Path.At(k / 8f));
+            if (points.Count < 2 || span.FromStop == span.ToStop && Vector2.Distance(span.From, span.To) < 1f)
+                continue;
 
-            points.Add(span.To);
-            graphics.DrawPolyLine(points.Select(p => p + new Vector2(0f, -6f)).ToArray(), colour, 1f);
+            graphics.DrawPolyLine(points.Select(p => p + new Vector2(0f, -6f)).ToArray(), Faded(colours.Held, 1f, opacity), 2f);
         }
 
         if (trail is { } behind && travelling)
@@ -414,7 +465,7 @@ internal sealed class StepPlan
     }
 
     private void DrawStop(Graphics graphics, int i, Color state, Color ahead, ClickPlan.Marks marks, bool current, float opacity,
-        ClickPlan.CursorTrail? trail)
+        ClickPlan.CursorTrail? trail, IReadOnlyCollection<Keys> heldHere, Color heldColour)
     {
         var bright = Faded(state, 1f, opacity);
         var dim = Faded(state, ClickPlan.UpStrength, opacity);
@@ -462,19 +513,31 @@ internal sealed class StepPlan
                 across[e.Anchor] = x + graphics.MeasureText(label).X + 3f;
             }
 
-            ClickPlan.Letter(graphics, label, e.Where + offset, e.Down ? bright : dim);
+            // A key down and still held at the stop the plan is at, in the held colour until it comes up.
+            var heldNow = e.Down && !button && heldHere != null && heldHere.Contains(e.Input);
+
+            ClickPlan.Letter(graphics, label, e.Where + offset, heldNow ? heldColour : e.Down ? bright : dim);
         }
 
-        var size = graphics.MeasureText("M");
+        // Keys held here that went down at an earlier stop: their letters on this stop's point, after its arrival keys.
+        if (marks.Modifiers && heldHere != null)
+        {
+            var x = across.GetValueOrDefault(StepAnchor.OnArrival);
+
+            foreach (var (key, mark, where) in HeldMarks(i, heldHere))
+            {
+                if (mark)
+                    continue;
+
+                var label = KeyLabel(key);
+
+                ClickPlan.Letter(graphics, label, where + new Vector2(x, -12f), heldColour);
+                x += graphics.MeasureText(label).X + 3f;
+            }
+        }
 
         if (marks.Numbers)
-            ClickPlan.Letter(graphics, $"{i + 1}", journey.To - new Vector2(0f, size.Y + 2f), dim);
-
-        if (stop.Gate)
-            ClickPlan.Letter(graphics, "?", journey.To + new Vector2(size.X + 4f, 0f), bright);
-
-        if (stop.Hold)
-            ClickPlan.Letter(graphics, "||", journey.To + new Vector2(size.X + 4f, stop.Gate ? size.Y : 0f), bright);
+            ClickPlan.Letter(graphics, $"{i + 1}", journey.To - new Vector2(0f, graphics.MeasureText("M").Y + 2f), dim);
     }
 
     /// <summary>C, S or A for the modifiers, as ClickPlan draws them; any other key by its name.</summary>

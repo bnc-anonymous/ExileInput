@@ -88,6 +88,9 @@ internal sealed class StepRunner
 
     public bool Ended => Phase is StepPhase.Done or StepPhase.Dropped;
 
+    /// <summary>Whether the plan is at the stop in hand - landed and not yet gone - for drawing the keys it holds there.</summary>
+    public bool AtStop => Phase is StepPhase.AtGate or StepPhase.Pressing or StepPhase.Holding or StepPhase.Leaving;
+
     /// <summary>Whether the cursor is on its way to the stop in hand, for drawing the way still ahead.</summary>
     public bool Travelling => Phase == StepPhase.Travelling && _setOff;
 

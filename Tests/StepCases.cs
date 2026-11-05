@@ -440,6 +440,53 @@ internal static class StepCases
                 "ctrl+A sent as a bare A types an A into the search box");
         }
 
+        // 16. Keys held at the stop the plan is at are drawn there: Alt at a Hold on its own mark; ctrl from a run's first
+        //     stop on a later stop's point, where it has no mark.
+        {
+            var altPlan = Plan(
+                new Stop(default, new Vector2(500, 120), [Ev(Alt, true, StepAnchor.OnArrival), Ev(Alt, false, StepAnchor.OnLeave)],
+                    false, true, false, -1),
+                At(300, 300, Click));
+            var io = new FakeStepIo();
+            var runner = new StepRunner(altPlan, io);
+
+            io.Run(runner, 500);
+            var altMarks = runner.AtStop ? altPlan.HeldMarks(runner.Index, runner.HeldKeys) : [];
+            runner.Proceed();
+            io.Run(runner, 400);
+            var afterMarks = altPlan.HeldMarks(runner.Index, runner.HeldKeys);
+
+            var ctrlPlan = Plan(
+                At(300, 200, Ev(Ctrl, true, StepAnchor.BeforeArrival), Click),
+                At(360, 210, Click),
+                At(420, 260, Click, Ev(Ctrl, false, StepAnchor.AfterPress)));
+            var ctrlMarks = ctrlPlan.HeldMarks(1, [Ctrl]);
+
+            var ok = altMarks is [{ Key: var a, Mark: true }] && a == Alt && afterMarks.Count == 0 &&
+                     ctrlMarks is [{ Key: var c, Mark: false, Where: var w }] && c == Ctrl && w == ctrlPlan.Journeys[1].To;
+
+            Report(ok, "16 A key held at a stop is drawn there until it comes up",
+                "Alt at the Hold on its own down mark; nothing once let go; ctrl at the run's second stop on its point",
+                $"at the Hold {string.Join(",", altMarks.Select(m => $"{m.Key}{(m.Mark ? " on its mark" : "")}"))}; after {afterMarks.Count}; " +
+                $"run {string.Join(",", ctrlMarks.Select(m => $"{m.Key} at ({m.Where.X:0},{m.Where.Y:0}){(m.Mark ? " on its mark" : "")}"))}",
+                "? and || on every stop were clutter (the player, 2026-11-05); what the player needs to see is which key is down, and where");
+        }
+
+        // 17. A ctrl+click's held line follows the approach from where ctrl goes down to the click, not a chord across.
+        {
+            var plan = Plan(At(300, 200, Ev(Ctrl, true, StepAnchor.BeforeArrival), Click, Ev(Ctrl, false, StepAnchor.AfterPress)));
+            var span = plan.HeldSpans().Single();
+            var line = plan.HeldLine(span);
+            var path = plan.Journeys[0].Path;
+            var offPath = line.Max(p => Enumerable.Range(0, 201).Min(k => Vector2.Distance(path.At(k / 200f), p)));
+            var ok = line.Count > 2 && line[0] == span.From && offPath < 3f;
+
+            Report(ok, "17 A key held on the way to one stop is drawn along the way",
+                "from ctrl's down mark along the approach to the click, every point within 3px of the path",
+                $"{line.Count} points, furthest {offPath:0.0}px off the path",
+                "the line from a C partway along the approach to Faustus was grey, thin and straight: nearly invisible (the player, 2026-11-05)");
+        }
+
         Console.WriteLine($"{cases - failed}/{cases} match");
         return failed;
     }

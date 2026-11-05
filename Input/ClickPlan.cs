@@ -447,7 +447,8 @@ internal sealed class ClickPlan
     /// <summary>A colour from alpha, red, green and blue, as System.Drawing's FromArgb takes them.</summary>
     internal static Color Argb(int a, int r, int g, int b) => new(r, g, b, Math.Clamp(a, 0, 255));
 
-    internal readonly record struct Colours(Color Current, Color Later, Color Done);
+    /// <remarks>Held: a key a step plan holds at the stop it is at. See StepPlan.HeldMarks.</remarks>
+    internal readonly record struct Colours(Color Current, Color Later, Color Done, Color Held = default);
 
     /// <summary>
     /// Which marks a plan is drawn with, from ExileInput's settings: the button letters, the modifier letters, each

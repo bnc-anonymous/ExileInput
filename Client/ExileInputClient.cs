@@ -699,8 +699,9 @@ public sealed class ExileInputClient
     /// Plans these stops and has the input plugin run them: each journey made, its keys and buttons at their anchors,
     /// waiting for Proceed only at a Gate or a Hold. A key that goes down stays down until an Up for it; whatever is still
     /// held when the plan ends, is dropped or replaced, or the cursor is given back, is let go (after any button is up).
-    /// With show, drawn: paths, L/R and C/S/A (or the key's name) bright where down and dim where up, a thin line for a
-    /// key held, ? at a Gate, || at a Hold. Replaces this caller's step plan or click plan; a move, drag or loiter of its
+    /// With show, drawn: paths, L/R and C/S/A (or the key's name) bright where down and dim where up, a held-colour line for a
+    /// key held across stops, and a key held at the stop the plan is at in the held colour until it comes up.
+    /// Replaces this caller's step plan or click plan; a move, drag or loiter of its
     /// own drops it. No stops drops it. Needs the cursor taken. False from a version too old to have it (BridgeVersion 3).
     /// <code>
     /// // Alt held over a header while a price loads, then a click on a slot - Alt let go as the cursor leaves.
