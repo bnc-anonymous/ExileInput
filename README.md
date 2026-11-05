@@ -132,6 +132,20 @@ its release — and without an expiry that is the cursor gone for the session, w
 just every other plugin quietly doing nothing. Five seconds by default: far longer than a move or a
 click, far shorter than a session.
 
+## Step plans
+
+`PlanSteps` (bridge version 3) hands ExileInput a list of **stops** to run itself: a journey to each, and keys and
+buttons going down and up at moments tied to it - before arrival (with a lead), on arrival, after the button comes up,
+or on leaving for the next stop. A key that goes down stays down until an Up for it, so a ctrl+click run is one ctrl
+down and one up, and Alt held over a header is Alt down on arrival and up on leaving. A stop can wait for the caller:
+a **Gate** before its arrival events (check what is under the cursor), a **Hold** after them (keys held, until a price
+loads); `Proceed()` moves it on, `StepWhere()` says where it is, `AbandonSteps()` ends it. Anything still held when the
+plan ends, is dropped or the cursor is given back is let go, after any button is up. Drawn like a click plan, with each
+event where it happens, a thin line for a key held, `?` at a Gate and `||` at a Hold.
+
+The click calls are unchanged. A caller has one plan at a time: a step plan replaces a click plan and the other way
+round, and a move, drag or loiter of the caller's own drops its step plan. See `docs/plan-steps.md`.
+
 ## What it knows that a fresh implementation would not
 
 - **A ctrl+right click that loses its modifier does not fail quietly.** On a Chaos Orb it *uses* the

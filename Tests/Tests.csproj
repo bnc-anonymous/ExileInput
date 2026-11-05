@@ -25,6 +25,11 @@
     <ProjectReference Include="..\ExileInput.csproj" />
   </ItemGroup>
 
+  <!-- The client file, compiled here only so a change to it is checked; consumers copy it. -->
+  <ItemGroup>
+    <Compile Include="..\Client\ExileInputClient.cs" Link="Client\ExileInputClient.cs" />
+  </ItemGroup>
+
   <!--
     ExileCore, only because the pointer takes a GameController and the cases construct one with
     null. Nothing here calls into it - the two seams stand in for the game - but the type has to be

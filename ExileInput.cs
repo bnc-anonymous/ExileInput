@@ -27,7 +27,7 @@ namespace ExileInput;
 /// If this plugin is not installed, a consumer's GetMethod comes back null and it can drive
 /// ExileCore.Input itself as it always did. Nothing here is load-bearing for anyone.
 /// </summary>
-public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
+public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
 {
     private readonly Lease _lease = new();
     private readonly Dictionary<string, MousePointer> _pointers = new(StringComparer.OrdinalIgnoreCase);
@@ -46,8 +46,9 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     /// 2: ExileInput.LastPressDownAt; letters, digits and Space held or tapped for a caller, and the player's keys pressed
     /// again after a key block, go out with their own scan codes. The scan codes turned out not to matter to the game
     /// (see PhysicalKeys). Both versions are ExileInput2's history; this port began at 2.
+    /// 3: step plans - PlanSteps, AddSteps, Proceed, StepState, StepWhy, AbandonSteps. See docs/plan-steps.md.
     /// </summary>
-    public const int BridgeVersion = 2;
+    public const int BridgeVersion = 3;
 
     public override bool Initialise()
     {
@@ -143,6 +144,8 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
             if (!_lease.Held(who))
                 return false;
 
+            DropSteps(who, "dropped: the caller loitered");
+
             // Any held from a loiter before, let go unless these are the same. See _loiterKeys.
             var keysCarried = EndLoiterKeys(who, modifiers ?? Modifier.None);
             var pointer = PointerFor(who);
@@ -207,6 +210,8 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         b.SaveMethod("ExileInput.ExtendPlan",
             (string who, RectangleF[] rects, Vector2[] points, bool[] rights, Keys[][] modifiers, int[] shortestMoveMs) =>
                 Gated(() => ExtendPlan(who, rects, points, rights, modifiers, shortestMoveMs)));
+        // Stops run by ExileInput, the caller stepping in only at a Gate or a Hold. See ExileInput.Steps.cs.
+        SaveStepMethods();
         b.SaveMethod("ExileInput.Drift", (string who) => Gated(() => Drift(who)));
         b.SaveMethod("ExileInput.Aiming", (string who) => Gated(() => Aiming(who)));
         b.SaveMethod("ExileInput.Expected", (string who) => Gated(() => Expected(who)));
@@ -503,6 +508,8 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         if (!_lease.Held(who))
             return false;
 
+        DropSteps(who, "dropped: the caller moved the cursor itself");
+
         var pointer = PointerFor(who);
         var carried = EndLoiterKeys(who, modifiers ?? Modifier.None) | CarryModifiers(who, modifiers);
 
@@ -593,6 +600,8 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     {
         if (!_lease.Held(who))
             return false;
+
+        DropSteps(who, "dropped: the caller started a drag");
 
         // Nothing clever if one is already running: a second drag from the same caller means the
         // first is not going to finish, so it is dropped with its button.
@@ -760,6 +769,8 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     {
         if (!_lease.Held(who))
             return false;
+
+        DropSteps(who, "dropped: the caller moved the cursor itself");
 
         var carried = EndLoiterKeys(who, modifiers ?? Modifier.None) | CarryModifiers(who, modifiers);
         var pointer = PointerFor(who);
@@ -1299,6 +1310,9 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
 
                 // A click armed for arrival, when the input thread is not there to make it. See ClickOnArrival.
                 ClickIfArrived(driving, pointer);
+
+                // The step plan, which waits on the game's frames only for its Gates and Holds. See ExileInput.Steps.cs.
+                StepSteps(driving);
             }
         }
 
@@ -1547,6 +1561,9 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
             return true;
         }
 
+        // One plan a caller: a step plan gives way to a click plan, letting go of what it held. See ExileInput.Steps.cs.
+        DropSteps(who, "replaced by a click plan");
+
         // A queue replaced: its clicks already made go on fading out, the rest give way to the new one. See ClickPlan.Draw.
         //
         // **The new queue's first journey continues the last one's curve** while the cursor is still on the click that
@@ -1628,6 +1645,8 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     /// </summary>
     private void FadePlan(string who, string why)
     {
+        DropSteps(who, $"faded out: {why}", letGo: false);
+
         if (who == null || !_plans.Remove(who, out var plan))
             return;
 
@@ -1692,6 +1711,8 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
             foreach (var (plan, since, doneOnly) in _fading)
                 plan.Draw(Graphics, colours, marks, doneOnly ? 1f : 1f - (float)((now - since).TotalMilliseconds / FadeFor.TotalMilliseconds), doneOnly);
         }
+
+        RenderSteps(colours, marks, now);
 
         if (_lease.Holder is { } holder && _plans.TryGetValue(holder, out var current) && current.Show)
         {
@@ -1803,6 +1824,7 @@ public class ExileInput : BaseSettingsPlugin<ExileInputSettings>
                         {
                             pointer.MoveAlong();
                             ClickIfArrived(driving, pointer);
+                            StepSteps(driving);
                         }
                     }
                 }

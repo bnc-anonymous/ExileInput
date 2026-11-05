@@ -1,5 +1,6 @@
 using ExileCore;
 using System;
+using System.Linq;
 using System.Windows.Forms;
 using RectangleF = SharpDX.RectangleF;
 using Vector2 = System.Numerics.Vector2;
@@ -71,6 +72,12 @@ public sealed class ExileInputClient
     private Func<string, bool> _keyBlockCancelled;
     private Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool, bool> _planClicks;
     private Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool> _extendPlan;
+    private Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], int[], int[], bool, bool> _planSteps;
+    private Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], int[], int[], bool> _addSteps;
+    private Func<string, bool> _proceed;
+    private Func<string, int[]> _stepState;
+    private Func<string, string> _stepWhy;
+    private Func<string, string, bool> _abandonSteps;
     private Func<string, bool, bool> _clickOnArrival;
     private Func<string, bool> _cancelClickOnArrival;
     private Func<string, bool> _clickedOnArrival;
@@ -205,6 +212,13 @@ public sealed class ExileInputClient
             _keyBlockCancelled = b.GetMethod<Func<string, bool>>("ExileInput.KeyBlockCancelled");
             _planClicks = b.GetMethod<Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool, bool>>("ExileInput.PlanClicks");
             _extendPlan = b.GetMethod<Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool>>("ExileInput.ExtendPlan");
+            // Step plans (bridge version 3); null against an older ExileInput, and every call then answers false.
+            _planSteps = b.GetMethod<Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], int[], int[], bool, bool>>("ExileInput.PlanSteps");
+            _addSteps = b.GetMethod<Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], int[], int[], bool>>("ExileInput.AddSteps");
+            _proceed = b.GetMethod<Func<string, bool>>("ExileInput.Proceed");
+            _stepState = b.GetMethod<Func<string, int[]>>("ExileInput.StepState");
+            _stepWhy = b.GetMethod<Func<string, string>>("ExileInput.StepWhy");
+            _abandonSteps = b.GetMethod<Func<string, string, bool>>("ExileInput.AbandonSteps");
             _clickOnArrival = b.GetMethod<Func<string, bool, bool>>("ExileInput.ClickOnArrival");
             _cancelClickOnArrival = b.GetMethod<Func<string, bool>>("ExileInput.CancelClickOnArrival");
             _clickedOnArrival = b.GetMethod<Func<string, bool>>("ExileInput.ClickedOnArrival");
@@ -603,6 +617,131 @@ public sealed class ExileInputClient
     {
         Look();
         return _extendPlan?.Invoke(_me, rects, points, rights, modifiers, shortestMoveMs) ?? false;
+    }
+
+    /// <summary>When a stop's event happens, tied to its journey.</summary>
+    public enum StepAnchor
+    {
+        /// <summary>A lead before the cursor lands (Modifier Timing), as a click's modifiers go down.</summary>
+        BeforeArrival = 0,
+
+        /// <summary>Once landed, and past the stop's Gate.</summary>
+        OnArrival = 1,
+
+        /// <summary>After the stop's button has come up and Modifier Timing more; straight after arrival with no button.</summary>
+        AfterPress = 2,
+
+        /// <summary>As the journey to the next stop sets off, or as the plan ends after the last.</summary>
+        OnLeave = 3,
+    }
+
+    /// <summary>Where a step plan has got to.</summary>
+    public enum StepPhase
+    {
+        None = 0,
+        Travelling = 1,
+        AtGate = 2,
+        Pressing = 3,
+        Holding = 4,
+        Leaving = 5,
+        Done = 6,
+        Dropped = 7,
+    }
+
+    /// <summary>
+    /// A key or a button going down or up at an anchor. Buttons are Keys.LButton and Keys.RButton: a button going down is
+    /// a click, brought up after the Click Hold, on arrival whatever anchor it names; a button's Up is implied.
+    /// </summary>
+    public readonly record struct StepEvent(Keys Input, bool Down, StepAnchor Anchor);
+
+    /// <summary>
+    /// One stop: a journey to the point (where given, not NaN) or else the rectangle, and its events. Gate: the plan waits
+    /// for Proceed before the arrival events - to check what is under the cursor. Hold: it waits for Proceed after them,
+    /// keys held - until a price loads, say. Wander: idle round the target while held rather than stay still.
+    /// ShortestMoveMs: -1 for the input plugin's own.
+    /// </summary>
+    public sealed record PlannedStop(RectangleF Rect, Vector2 Point, StepEvent[] Events, bool Gate = false, bool Hold = false,
+        bool Wander = false, int ShortestMoveMs = -1)
+    {
+        /// <summary>A stop at a rectangle, landing where the input plugin would aim in it.</summary>
+        public static PlannedStop At(RectangleF rect, params StepEvent[] events) => new(rect, new Vector2(float.NaN, float.NaN), events);
+
+        /// <summary>A stop on a point.</summary>
+        public static PlannedStop On(Vector2 point, params StepEvent[] events) => new(default, point, events);
+    }
+
+    /// <summary>The stop in hand, the phase, and why the plan was dropped ("" otherwise).</summary>
+    public readonly record struct StepState(int Index, StepPhase Phase, string Why);
+
+    /// <summary>
+    /// Plans these stops and has the input plugin run them: each journey made, its keys and buttons at their anchors,
+    /// waiting for Proceed only at a Gate or a Hold. A key that goes down stays down until an Up for it; whatever is still
+    /// held when the plan ends, is dropped or replaced, or the cursor is given back, is let go (after any button is up).
+    /// With show, drawn: paths, L/R and C/S/A (or the key's name) bright where down and dim where up, a thin line for a
+    /// key held, ? at a Gate, || at a Hold. Replaces this caller's step plan or click plan; a move, drag or loiter of its
+    /// own drops it. No stops drops it. Needs the cursor taken. False from a version too old to have it (BridgeVersion 3).
+    /// <code>
+    /// // Alt held over a header while a price loads, then a click on a slot - Alt let go as the cursor leaves.
+    /// _input.PlanSteps([
+    ///     PlannedStop.At(header, new StepEvent(Keys.LMenu, true, StepAnchor.OnArrival),
+    ///         new StepEvent(Keys.LMenu, false, StepAnchor.OnLeave)) with { Hold = true },
+    ///     PlannedStop.At(slot, new StepEvent(Keys.LButton, true, StepAnchor.OnArrival)),
+    /// ], show: true);
+    /// // ... once the price has loaded:
+    /// _input.Proceed();
+    /// </code>
+    /// </summary>
+    public bool PlanSteps(PlannedStop[] stops, bool show)
+    {
+        Look();
+        var f = Flatten(stops);
+        return _planSteps?.Invoke(_me, f.Rects, f.Points, f.Counts, f.Inputs, f.Downs, f.Anchors, f.Flags, f.Shortest, show) ?? false;
+    }
+
+    /// <summary>Stops added to the end of the step plan, going on from its last journey and the keys it holds.</summary>
+    public bool AddSteps(PlannedStop[] stops)
+    {
+        Look();
+        var f = Flatten(stops);
+        return _addSteps?.Invoke(_me, f.Rects, f.Points, f.Counts, f.Inputs, f.Downs, f.Anchors, f.Flags, f.Shortest) ?? false;
+    }
+
+    /// <summary>Past the Gate or Hold the step plan waits at; false when it waits at neither.</summary>
+    public bool Proceed()
+    {
+        Look();
+        return _proceed?.Invoke(_me) ?? false;
+    }
+
+    /// <summary>Where the step plan has got to; None with no plan, or from a version too old to have them.</summary>
+    public StepState StepWhere()
+    {
+        Look();
+        var state = _stepState?.Invoke(_me);
+        return state is { Length: >= 2 }
+            ? new StepState(state[0], (StepPhase)state[1], _stepWhy?.Invoke(_me) ?? "")
+            : new StepState(0, StepPhase.None, "");
+    }
+
+    /// <summary>Ends the step plan, letting go of what it holds.</summary>
+    public bool AbandonSteps(string why)
+    {
+        Look();
+        return _abandonSteps?.Invoke(_me, why) ?? false;
+    }
+
+    /// <summary>Stops as the bridge carries them: arrays, each stop's events the next Counts[i] of the event arrays.</summary>
+    private static (RectangleF[] Rects, Vector2[] Points, int[] Counts, Keys[] Inputs, bool[] Downs, int[] Anchors, int[] Flags,
+        int[] Shortest) Flatten(PlannedStop[] stops)
+    {
+        stops ??= [];
+        var events = stops.SelectMany(s => s.Events ?? []).ToArray();
+
+        return (stops.Select(s => s.Rect).ToArray(), stops.Select(s => s.Point).ToArray(),
+            stops.Select(s => s.Events?.Length ?? 0).ToArray(), events.Select(e => e.Input).ToArray(),
+            events.Select(e => e.Down).ToArray(), events.Select(e => (int)e.Anchor).ToArray(),
+            stops.Select(s => (s.Gate ? 1 : 0) | (s.Hold ? 2 : 0) | (s.Wander ? 4 : 0)).ToArray(),
+            stops.Select(s => s.ShortestMoveMs).ToArray());
     }
 
     /// <summary>

@@ -348,7 +348,7 @@ internal sealed class ClickPlan
     internal readonly record struct CursorTrail(IReadOnlyList<(Vector2 Where, float Age)> Points, float Progress);
 
     /// <summary>The cursor's recent places as a line fading out behind it, newest the strongest. See Draw.</summary>
-    private static void DrawTrail(Graphics graphics, CursorTrail trail, Color colour, float opacity)
+    internal static void DrawTrail(Graphics graphics, CursorTrail trail, Color colour, float opacity)
     {
         var points = trail.Points;
 
@@ -432,9 +432,9 @@ internal sealed class ClickPlan
             Letter(graphics, modifier, item.To + step * 2f, dim);
     }
 
-    private const int PathSamples = 20;
+    internal const int PathSamples = 20;
 
-    private static void Letter(Graphics graphics, string text, Vector2 at, Color colour)
+    internal static void Letter(Graphics graphics, string text, Vector2 at, Color colour)
     {
         graphics.DrawText(text, at, colour,
             ExileCore.Shared.Enums.FontAlign.Center | ExileCore.Shared.Enums.FontAlign.VerticalCenter);
@@ -445,7 +445,7 @@ internal sealed class ClickPlan
     /// come, and the clicks made as they fade. Each colour's own alpha is its strength. See ExileInputSettings.
     /// </summary>
     /// <summary>A colour from alpha, red, green and blue, as System.Drawing's FromArgb takes them.</summary>
-    private static Color Argb(int a, int r, int g, int b) => new(r, g, b, Math.Clamp(a, 0, 255));
+    internal static Color Argb(int a, int r, int g, int b) => new(r, g, b, Math.Clamp(a, 0, 255));
 
     internal readonly record struct Colours(Color Current, Color Later, Color Done);
 
@@ -459,10 +459,10 @@ internal sealed class ClickPlan
     /// How strong a mark of something coming up - a button, a modifier - and a click's number are, as a share of the
     /// colour's own: fainter than something going down, in the same colour.
     /// </summary>
-    private const float UpStrength = 0.63f;
+    internal const float UpStrength = 0.63f;
 
     /// <summary>C for ctrl, S for shift, A for alt; "" for none.</summary>
-    private static string ModifierLetters(IReadOnlyList<Keys> modifiers)
+    internal static string ModifierLetters(IReadOnlyList<Keys> modifiers)
     {
         var letters = "";
 
