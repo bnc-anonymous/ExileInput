@@ -55,6 +55,9 @@ internal static class Program
         failed += StepCases.Run();
 
         Console.WriteLine();
+        failed += KeyGuardCases.Run();
+
+        Console.WriteLine();
         Console.WriteLine(failed == 0
             ? "all tables match"
             : $"{failed} case(s) do not match");

@@ -47,8 +47,10 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     /// again after a key block, go out with their own scan codes. The scan codes turned out not to matter to the game
     /// (see PhysicalKeys). Both versions are ExileInput2's history; this port began at 2.
     /// 3: step plans - PlanSteps, AddSteps, Proceed, StepState, StepWhy, AbandonSteps. See docs/plan-steps.md.
+    /// 4: SwallowedKey. While this plugin holds Ctrl, Shift or Alt for a caller, the player's key presses are swallowed
+    /// and stop the holder with PlayerPressedAKey, naming the key. See KeyGuard and StopForSwallowedKeys.
     /// </summary>
-    public const int BridgeVersion = 3;
+    public const int BridgeVersion = 4;
 
     public override bool Initialise()
     {
@@ -107,6 +109,24 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
 
         // What the last stop saw, for a caller to record; never drawn here. See MousePointer.StopDetail.
         b.SaveMethod("ExileInput.StopDetail", (string who) => Gated(() => PointerFor(who).StopDetail));
+
+        // The player's key swallowed under this plugin's modifiers that stopped this caller, Keys.None if none did. See
+        // StopForSwallowedKeys.
+        b.SaveMethod("ExileInput.SwallowedKey", (string who) => Gated(() => SwallowedKey(who)));
+
+        // A key the player presses while this plugin holds a modifier is swallowed by KeyWatch's hook, on its own thread;
+        // the holder is stopped from the thread pool, under the gate, at once. Tick and the input thread look as well.
+        KeyWatch.OnSwallowed = () => System.Threading.ThreadPool.UnsafeQueueUserWorkItem(_ =>
+        {
+            try
+            {
+                Gated(StopForSwallowedKeys);
+            }
+            catch (Exception e)
+            {
+                _moverFault = $"{e.GetType().Name}: {e.Message}";
+            }
+        }, null);
         // Panels a caller says take no typed input, focus inside which does not stop it. See AllowFocusUnder.
         b.SaveMethod("ExileInput.AllowFocusUnder", (string who, long[] roots) => Gated(() => AllowFocusUnder(who, roots)));
 
@@ -312,7 +332,10 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         // finds the cursor nowhere the ring remembers, calls it interference and stops. From the
         // outside that is a plugin that refuses every other request for no stated reason.
         if (!already)
+        {
             PointerFor(who).Fresh();
+            _swallowedKeys.Remove(who);
+        }
 
         return true;
     }
@@ -953,6 +976,43 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int key);
 
+    /// <summary>
+    /// **The player's key swallowed while this plugin held a modifier.** KeyWatch's hook swallows every key the player
+    /// presses while this plugin holds Ctrl, Shift or Alt for anyone - Windows and the game never see it, so F4 cannot be
+    /// Alt+F4 - and queues it here (see KeyGuard). The holder of the cursor is stopped with PlayerPressedAKey, as a key
+    /// stops a caller that asked for it, the key named in the stop's detail and kept for SwallowedKey; then every modifier
+    /// is let go, the holder's by Abandon and anyone else's - a key bag let go after a press, a key that went down by a
+    /// path that did not record itself - here. Run from the thread pool as the hook swallows, and from Tick and the input
+    /// thread, all under the gate; a second run finds nothing.
+    /// </summary>
+    private void StopForSwallowedKeys()
+    {
+        if (!KeyWatch.TakeSwallowed(out var code))
+            return;
+
+        var key = (Keys)code;
+
+        if (_lease.Holder is { } who)
+        {
+            _swallowedKeys[who] = key;
+            PointerFor(who).Stop(StopReason.PlayerPressedAKey,
+                $"the player pressed {key} while ExileInput held a modifier; swallowed, so neither Windows nor the game saw it");
+            Abandon(who, StopReason.PlayerPressedAKey);
+        }
+
+        foreach (var keys in _keys.Values)
+            foreach (var held in keys.Down.ToList())
+                if (KeyGuard.IsModifier(held))
+                    keys.Let(held);
+
+        InputOut.LetGoOfModifiers();
+    }
+
+    /// <summary>The key swallowed when each caller was last stopped for one, until it next takes the cursor. See StopForSwallowedKeys.</summary>
+    private readonly Dictionary<string, Keys> _swallowedKeys = new(StringComparer.OrdinalIgnoreCase);
+
+    private Keys SwallowedKey(string who) => who != null && _swallowedKeys.TryGetValue(who, out var key) ? key : Keys.None;
+
     /// <summary>Callers stopped by the player's keys, with the keys that do not stop them. See StopOnPlayerKeys.</summary>
     private readonly Dictionary<string, HashSet<int>> _keyStops = new(StringComparer.OrdinalIgnoreCase);
 
@@ -1249,6 +1309,9 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
 
         // The hardware-input boards opened, closed or lost, as Use Hardware Input asks. See Boards.
         StepBoards();
+
+        // A key the player pressed under this plugin's modifiers, if the thread pool has not already stopped for it.
+        StopForSwallowedKeys();
 
         // A click's button comes up when its hold is over, whoever holds the cursor now. See Buttons.Press.
         Buttons.Step();
@@ -1819,6 +1882,8 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
                         if (_moverStopping || !Settings.RunInputTimingOnOwnThread.Value)
                             continue;
 
+                        // Before anything moves on: a key the player pressed under this plugin's modifiers stops the holder.
+                        StopForSwallowedKeys();
                         Buttons.Step();
 
                         if (_lease.Holder is { } driving && _pointers.TryGetValue(driving, out var pointer) && pointer.MovedElsewhere)
@@ -1855,6 +1920,7 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
 
         AppDomain.CurrentDomain.ProcessExit -= LetGoOfEverything;
         AppDomain.CurrentDomain.UnhandledException -= LetGoOfEverything;
+        KeyWatch.OnSwallowed = null;
 
         foreach (var stroke in _strokes.Values)
             stroke.Abandon();

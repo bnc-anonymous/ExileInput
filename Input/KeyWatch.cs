@@ -14,6 +14,10 @@ namespace ExileInput;
 /// key-down without the injected flag is the player's; keys this plugin sends carry the flag and pass. Watching queues
 /// the player's key-downs by virtual-key code for the next tick to read; blocking drops them before the game sees them.
 /// A key-up always passes, so no key is left down. The keys held when a block began and still held when it ends are pressed again. See Restore.
+///
+/// And while this plugin holds Ctrl, Shift or Alt (InputOut.ModifierHeld), the hook is in whether or not anything watches or blocks, and every
+/// key-down of the player's is swallowed - never reaching Windows or the game - and queued for the holder to be stopped,
+/// with its up and repeats swallowed too. See KeyGuard and ExileInput.StopForSwallowedKeys.
 /// </summary>
 internal static class KeyWatch
 {
@@ -49,6 +53,13 @@ internal static class KeyWatch
     /// </summary>
     private static void Restore()
     {
+        // Not under this plugin's modifiers: Space pressed again under Alt is the window menu. The player presses again.
+        if (InputOut.ModifierHeld)
+        {
+            HeldThroughBlock.Clear();
+            return;
+        }
+
         foreach (var key in HeldThroughBlock.Keys)
         {
             try
@@ -68,18 +79,79 @@ internal static class KeyWatch
     /// <summary>The player's key-downs since the last Drain, by virtual-key code.</summary>
     private static readonly ConcurrentQueue<int> Pressed = new();
 
+    /// <summary>What the hook does with the player's keys while this plugin holds a modifier, and the swallowed keys' ups it owes. See KeyGuard.</summary>
+    private static readonly KeyGuard Swallowing = new();
+
+    /// <summary>The player's key-downs swallowed under this plugin's modifiers, by virtual-key code, for the holder to be stopped. See TakeSwallowed.</summary>
+    private static readonly ConcurrentQueue<int> Swallowed = new();
+
+    /// <summary>
+    /// Called by the hook, on its own thread, when it swallows a key-down under this plugin's modifiers; it must return at once -
+    /// a hook that is slow lets the key on to Windows, and Windows takes a hook that keeps timing out away altogether. The
+    /// plugin queues its stop to the thread pool. See ExileInput.StopForSwallowedKeys.
+    /// </summary>
+    public static volatile Action OnSwallowed;
+
+    /// <summary>
+    /// The first key-down swallowed under this plugin's modifiers since the last call, by virtual-key code, the rest dropped as
+    /// the same stop; false when none was.
+    /// </summary>
+    public static bool TakeSwallowed(out int key)
+    {
+        key = 0;
+        var any = false;
+
+        while (Swallowed.TryDequeue(out var next))
+        {
+            if (!any)
+                key = next;
+
+            any = true;
+        }
+
+        return any;
+    }
+
+    /// <summary>Set while the hook is in, by the thread that put it in; reset as it comes off. See Guard.</summary>
+    private static readonly ManualResetEventSlim Hooked = new(false);
+
+    /// <summary>How long Guard waits for the hook to go in, in milliseconds; it takes one or two.</summary>
+    private const int GuardWaitMs = 250;
+
+    /// <summary>
+    /// Puts the hook in, if it is not, for one of this plugin's modifiers about to go down, and waits for it: true once it is in, false
+    /// when it could not be put in. The hook stays while InputOut.ModifierHeld, and until every swallowed key's up has come.
+    /// See KeyGuard.
+    /// </summary>
+    public static bool Guard()
+    {
+        lock (Gate)
+            StartThread();
+
+        return Hooked.Wait(GuardWaitMs);
+    }
+
+    /// <summary>Starts the hook's thread unless it is running. Under Gate.</summary>
+    private static void StartThread()
+    {
+        if (_thread is { IsAlive: true })
+            return;
+
+        // Above the rest: a hook not answered in time lets the key through, and Alt+F4 with it.
+        _thread = new Thread(Run) { IsBackground = true, Name = "ExileInput key watch", Priority = ThreadPriority.Highest };
+        _thread.Start();
+    }
+
+    /// <summary>Whether the hook must stay in for this plugin's modifiers, or for a swallowed key's up still to come. See KeyGuard.</summary>
+    private static bool Guarding => InputOut.ModifierHeld || !Swallowing.Empty;
+
     /// <summary>Starts watching, if not already.</summary>
     public static void Start()
     {
         lock (Gate)
         {
             _watching = true;
-
-            if (_thread is { IsAlive: true })
-                return;
-
-            _thread = new Thread(Run) { IsBackground = true, Name = "ExileInput key watch" };
-            _thread.Start();
+            StartThread();
         }
     }
 
@@ -167,11 +239,10 @@ internal static class KeyWatch
             if (ms > 0 && CancelKeyIsMouseButton)
                 MouseBlock.Watch();
 
-            if (ms == 0 || _thread is { IsAlive: true })
+            if (ms == 0)
                 return;
 
-            _thread = new Thread(Run) { IsBackground = true, Name = "ExileInput key watch" };
-            _thread.Start();
+            StartThread();
         }
     }
 
@@ -192,6 +263,8 @@ internal static class KeyWatch
 
         if (hook == IntPtr.Zero)
             return;
+
+        Hooked.Set();
 
         var wasBlocking = false;
 
@@ -214,10 +287,13 @@ internal static class KeyWatch
 
                 wasBlocking = blocking;
 
+                Swallowing.ForgetStale(Environment.TickCount64);
+
                 lock (Gate)
                 {
-                    if (!_watching && !Blocking)
+                    if (!_watching && !Blocking && !Guarding)
                     {
+                        Hooked.Reset();
                         _thread = null;
                         return;
                     }
@@ -232,6 +308,10 @@ internal static class KeyWatch
 
     private static IntPtr Hook(int code, IntPtr message, IntPtr data)
     {
+        // One of this plugin's modifiers down, or a swallowed key's up still to come: the player's key decided first. See KeyGuard.
+        if (code >= 0 && (int)message is WmKeyDown or WmSysKeyDown or WmKeyUp or WmSysKeyUp && Guarding && GuardSwallows(message, data))
+            return 1;
+
         if (code >= 0 && (int)message is WmKeyDown or WmSysKeyDown)
         {
             var info = Marshal.PtrToStructure<KeyHookInfo>(data);
@@ -274,6 +354,64 @@ internal static class KeyWatch
 
         return CallNextHookEx(IntPtr.Zero, code, message, data);
     }
+
+    /// <summary>
+    /// Whether the guard swallows this key event, the player's under this plugin's modifiers or part of a press swallowed so;
+    /// a swallowed press queued for the holder's stop. On the hook's thread; returns at once, whatever happens. See KeyGuard.
+    /// </summary>
+    private static bool GuardSwallows(IntPtr message, IntPtr data)
+    {
+        try
+        {
+            var info = Marshal.PtrToStructure<KeyHookInfo>(data);
+            var key = (int)info.VirtualKey;
+            var down = (int)message is WmKeyDown or WmSysKeyDown;
+
+            // This plugin's own: injected on Windows input; on the boards, which send as a keyboard does, the keys the
+            // keyboard board holds for it (Boards.IsOwnKey). The keys the board presses again as its lock ends are the
+            // player's, held, and count as the player's here: swallowed like any other under a modifier.
+            var own = (info.Flags & (LlkhfInjected | LlkhfLowerIlInjected)) != 0 || Boards.IsOwnKey(key);
+            var modifierHeld = InputOut.ModifierHeld;
+
+            // Read before this event is applied: down already means Windows saw this key go down before. See KeyGuard. Not
+            // a modifier this plugin holds, which reads down for this plugin: the player's press of it is fresh, and its up
+            // swallowed with it, or that up would let go of this plugin's own.
+            var alreadyDown = down && !own && modifierHeld && !InputOut.HoldsSameModifier((System.Windows.Forms.Keys)key) &&
+                              (GetAsyncKeyState(key) & 0x8000) != 0;
+
+            var verdict = Swallowing.OnKey(key, down, own, modifierHeld, alreadyDown, Environment.TickCount64);
+
+            if (!verdict.Swallow)
+                return false;
+
+            if (!down)
+            {
+                // Its press was swallowed, so it is not one held through a block either.
+                HeldThroughBlock.TryRemove(key, out _);
+                return true;
+            }
+
+            // A block's cancel key still ends the block, as well as stopping the holder.
+            if (IsCancelKey(key))
+                CancelBlock();
+
+            if (verdict.StopHolder)
+            {
+                Swallowed.Enqueue(key);
+                OnSwallowed?.Invoke();
+            }
+
+            return true;
+        }
+        catch
+        {
+            // Under this plugin's modifiers, swallowed all the same: a key let through here could be Alt+F4 or Ctrl+Esc.
+            return InputOut.ModifierHeld;
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int key);
 
     private const int WhKeyboardLl = 13;
     private const uint QsAllInput = 0x04FF;

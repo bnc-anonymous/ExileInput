@@ -66,6 +66,31 @@ go where it is sent. `Stopped()` says which — check it on every tick of a sequ
 ignores it stops working rather than fighting the player for the cursor, which is the safe way round
 for it to be wrong, but it stops silently.
 
+### Keys pressed while a modifier is held
+
+While ExileInput holds **Ctrl, Shift or Alt** for any caller - a step plan's key events, a click's modifier lead and
+hold, a ctrl run carried across clicks, a loiter's keys, `Hold` - every key the player presses on their own keyboard is
+**swallowed**: a low-level keyboard hook drops it, and its release, before Windows or the game sees either. Otherwise
+the player's F4 under the plugin's Alt is Alt+F4 and the game closes; Alt+Enter, Alt+Tab, Ctrl+Esc, Ctrl+Shift+Esc and
+the game's own Ctrl and Shift combinations are no better. One rule, no list of shortcuts, and no key exempt - modifiers
+included, as Ctrl+Shift and Alt+Shift switch the keyboard layout.
+
+The holder is stopped with `PlayerPressedAKey`, whether or not it asked for `StopOnPlayerKeys`, the key is named in
+`StopDetail()` ("the player pressed F4 while ExileInput held a modifier; ..."), `SwallowedKey()` returns it, and every
+modifier is let go at once. A swallowed key never reaches a hotkey check, so a plugin whose stop key it was compares
+`SwallowedKey()` with its key and treats a match as that key pressed:
+
+```csharp
+if (_input.Stopped() == "PlayerPressedAKey" && _input.SwallowedKey() == stopKey)
+    StopEverything();
+```
+
+Keys ExileInput sends always pass: on Windows input they carry the injected flag; with hardware input the keyboard
+board's keys reach Windows as a keyboard's, and the hook tells them from the player's by what the board holds for
+ExileInput. A key the player was already holding when the modifier went down keeps its release, so the game does not
+think it held; its repeats are swallowed. A modifier is not pressed at all if the hook cannot be put in. Callers that
+never hold a modifier see no change. Bridge version 4.
+
 All of this is a guess about lag away from being useless, so it is under test: `Tests/StopCases.cs`
 is the table, and case 2 is the one that matters. The game reports its cursor several frames behind
 where it was put, so mid-journey the reported position and the last sent position are never equal -

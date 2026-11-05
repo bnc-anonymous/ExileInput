@@ -119,6 +119,7 @@ internal sealed class HeldKeys
         if (Boards.InUse)
         {
             Boards.ReleaseAll();
+            InputOut.ForgetModifiers();
             return;
         }
 

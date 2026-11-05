@@ -85,6 +85,7 @@ public sealed class ExileInputClient
     private Func<string, string> _stopped;
 
     private Func<string, string> _stopDetail;
+    private Func<string, Keys> _swallowedKey;
     private Func<string, string[]> _planEndsSaid;
     private Func<string, long[], bool> _allowFocusUnder;
     private Func<string, Vector2, float, int, Keys[], bool> _loiter;
@@ -225,6 +226,7 @@ public sealed class ExileInputClient
             _lastMoveTimes = b.GetMethod<Func<string, float[]>>("ExileInput.LastMoveTimes");
             _stopped = b.GetMethod<Func<string, string>>("ExileInput.Stopped");
             _stopDetail = b.GetMethod<Func<string, string>>("ExileInput.StopDetail");
+            _swallowedKey = b.GetMethod<Func<string, Keys>>("ExileInput.SwallowedKey");
             _planEndsSaid = b.GetMethod<Func<string, string[]>>("ExileInput.PlanEndsSaid");
             _allowFocusUnder = b.GetMethod<Func<string, long[], bool>>("ExileInput.AllowFocusUnder");
             _loiter = b.GetMethod<Func<string, Vector2, float, int, Keys[], bool>>("ExileInput.Loiter");
@@ -414,6 +416,10 @@ public sealed class ExileInputClient
     /// and the reason there is no panic key to remember. Also reports the game losing focus, the
     /// game taking typed input, and a move that never landed.
     ///
+    /// "PlayerPressedAKey" also comes, unasked, from a key the player pressed while ExileInput held
+    /// Ctrl, Shift or Alt for this plugin: that key was swallowed - neither Windows nor the game saw
+    /// it, so F4 could not be Alt+F4 - and <see cref="SwallowedKey"/> names it. Bridge version 4.
+    ///
     /// **Check it on every tick of a sequence, and stop the sequence when it says something.** It
     /// stays set until <see cref="Release"/> is called, and <see cref="Take"/> refuses until then,
     /// so a caller that ignores it simply stops working rather than fighting the player for the
@@ -433,6 +439,21 @@ public sealed class ExileInputClient
     {
         Look();
         return _stopDetail?.Invoke(_me) ?? "";
+    }
+
+    /// <summary>
+    /// The key the player pressed that stopped this plugin while ExileInput held a modifier for it, Keys.None if the last
+    /// stop was not one. While ExileInput holds Ctrl, Shift or Alt for any caller - a step plan's keys, a click's modifier,
+    /// a ctrl run across clicks, a loiter's keys, Hold - every key the player presses is swallowed before Windows or the
+    /// game sees it, its release too, and the holder is stopped with "PlayerPressedAKey", the key named in
+    /// <see cref="StopDetail"/>; the modifiers are let go at once. So a stop key the player presses then never reaches
+    /// your hotkey check: compare it with this instead and treat a match as that key pressed. Kept until the next
+    /// <see cref="Take"/> after a <see cref="Release"/>. Keys.None from an ExileInput too old to say (bridge version below 4).
+    /// </summary>
+    public Keys SwallowedKey()
+    {
+        Look();
+        return _swallowedKey?.Invoke(_me) ?? Keys.None;
     }
 
     /// <summary>
@@ -565,6 +586,8 @@ public sealed class ExileInputClient
     /// Until this caller releases the cursor or is stopped, a key the player presses - any but those given - stops it
     /// with "PlayerPressedAKey", as moving the mouse does; keys sent through ExileInput do not count. Cleared on
     /// release, so ask again after each Take. Needs the cursor taken. False from an ExileInput too old to have it.
+    /// Whether asked or not, a key pressed while ExileInput holds a modifier for this plugin is swallowed and stops it,
+    /// the except list notwithstanding. See SwallowedKey.
     /// </summary>
     public bool StopOnPlayerKeys(Keys[] except)
     {
