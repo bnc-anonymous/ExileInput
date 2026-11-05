@@ -969,8 +969,12 @@ internal sealed class MousePointer
             return;
         }
 
-        var origin = _gc.Window.GetWindowRectangle().TopLeft;
+        var window = _gc.Window.GetWindowRectangle();
+        var origin = window.TopLeft;
         var screen = new Vector2(origin.X + client.X, origin.Y + client.Y);
+
+        // The board steers by counts, and is kept inside the window as it goes (see Boards' steering notes).
+        Boards.Bounds((int)window.Left, (int)window.Top, (int)window.Right, (int)window.Bottom);
 
         MouseBlock.OwnMoveTo((int)screen.X, (int)screen.Y);
         InputOut.CursorTo(screen);

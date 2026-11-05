@@ -827,6 +827,12 @@ internal static partial class Boards
     // cursor trails Windows by a millisecond or two, so the gap is closed slowly rather than all at once, or it would be
     // sent twice. Once the target stops moving, small steps every few milliseconds bring it onto the exact pixel. The
     // path itself, its timing and the checks on it are this plugin's, as they were (see MousePointer).
+    //
+    // Counts sent and not yet seen by Windows are counted in (_unseenX/Y): the gap is from where the cursor will be once
+    // they land, not from where it was last seen. Without that, a link running a few milliseconds behind made every step
+    // close a gap already being closed, and the far settling - a third of the gap every millisecond - swung wider each
+    // time until the cursor hit the screen's edge (off the bottom of the screen, 2026-11-05). And no step is sent that
+    // would carry the cursor outside the game window (Bounds), whatever the gap says.
 
     /// <summary>How strongly each step closes the gap between the cursor and its target, per step.</summary>
     private const double SteerGain = 0.15;
@@ -860,6 +866,24 @@ internal static partial class Boards
 
     private static double _carryY;
 
+    /// <summary>Counts sent that the cursor has not shown yet, and where it was last seen. See the steering notes.</summary>
+    private static int _unseenX, _unseenY, _seenX, _seenY;
+
+    /// <summary>When the cursor was last seen to move: counts unseen for longer than UnseenForMs are given up on.</summary>
+    private static long _seenMovedAt;
+
+    private const int UnseenForMs = 40;
+
+    /// <summary>The game window on screen, which no step carries the cursor out of; empty for no limit.</summary>
+    private static (int Left, int Top, int Right, int Bottom)? _bounds;
+
+    /// <summary>Sets the game window on screen, which no steering step carries the cursor out of.</summary>
+    public static void Bounds(int left, int top, int right, int bottom)
+    {
+        lock (TargetGate)
+            _bounds = right > left && bottom > top ? (left, top, right, bottom) : null;
+    }
+
     private static int _onTarget;
 
     private static System.Threading.Thread _steering;
@@ -878,6 +902,10 @@ internal static partial class Boards
                 _lastTargetX = at.X;
                 _lastTargetY = at.Y;
                 _carryX = _carryY = 0;
+                _unseenX = _unseenY = 0;
+                _seenX = at.X;
+                _seenY = at.Y;
+                _seenMovedAt = Environment.TickCount64;
             }
 
             _targetX = x;
@@ -1003,7 +1031,24 @@ internal static partial class Boards
 
             GetCursorPos(out var at);
 
-            int gapX = _targetX - at.X, gapY = _targetY - at.Y;
+            // What has landed since the last look comes off what is still unseen - never past nought, so the player's
+            // own hand, or the screen's edge, cannot leave a count owed the other way.
+            int seenX = at.X - _seenX, seenY = at.Y - _seenY;
+            _seenX = at.X;
+            _seenY = at.Y;
+
+            if (seenX != 0 || seenY != 0)
+                _seenMovedAt = now;
+
+            _unseenX = Owed(_unseenX, seenX);
+            _unseenY = Owed(_unseenY, seenY);
+
+            if (now - _seenMovedAt > UnseenForMs)
+                _unseenX = _unseenY = 0;
+
+            // Where the cursor will be once what is on its way lands.
+            int willX = at.X + _unseenX, willY = at.Y + _unseenY;
+            int gapX = _targetX - willX, gapY = _targetY - willY;
             int movedX = _targetX - _lastTargetX, movedY = _targetY - _lastTargetY;
 
             _lastTargetX = _targetX;
@@ -1046,11 +1091,25 @@ internal static partial class Boards
                 _carryX = Math.Clamp(_carryX - stepX, -1, 1);
                 _carryY = Math.Clamp(_carryY - stepY, -1, 1);
             }
+
+            // Never out of the game window, wherever the gap points.
+            if (_bounds is { } b)
+            {
+                stepX = Math.Clamp(stepX, Math.Min(0, b.Left - willX), Math.Max(0, b.Right - 1 - willX));
+                stepY = Math.Clamp(stepY, Math.Min(0, b.Top - willY), Math.Max(0, b.Bottom - 1 - willY));
+            }
+
+            _unseenX += stepX;
+            _unseenY += stepY;
         }
 
         if (stepX != 0 || stepY != 0)
             mouse.Move(stepX, stepY);
     }
+
+    /// <summary>What is still owed after <paramref name="seen"/> of it landed: towards nought, never past it.</summary>
+    private static int Owed(int unseen, int seen) =>
+        unseen > 0 ? Math.Max(0, unseen - Math.Max(0, seen)) : unseen < 0 ? Math.Min(0, unseen - Math.Min(0, seen)) : 0;
 
     private static int SettleStep(int gap) =>
         gap == 0 ? 0 : Math.Sign(gap) * Math.Clamp((int)Math.Round(Math.Abs(gap) / 3.0), 1, MostStep);
@@ -1125,6 +1184,10 @@ internal static partial class Boards
     }
 
     public static void CursorTo(int x, int y)
+    {
+    }
+
+    public static void Bounds(int left, int top, int right, int bottom)
     {
     }
 
