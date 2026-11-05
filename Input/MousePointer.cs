@@ -943,9 +943,17 @@ internal sealed class MousePointer
         }
     }
 
-    /// <summary>The one place the window origin is added.</summary>
+    /// <summary>
+    /// The one place the window origin is added, and the one place every point is kept inside the game window: a long
+    /// journey's bow, a wander or a loiter could carry the cursor off the window's edge (off the bottom of the screen,
+    /// 2026-11-05). Planned curves are kept inside already (ClickPlan.Make); this holds for every move. The point kept is
+    /// the point remembered, so the player-moved-the-mouse check compares against where the cursor really went.
+    /// </summary>
     private void Put(Vector2 client)
     {
+        if (ClientSize is { X: > 1f, Y: > 1f } size)
+            client = new Vector2(Math.Clamp(client.X, 0f, size.X - 1f), Math.Clamp(client.Y, 0f, size.Y - 1f));
+
         Remember(client);
         _lastPut = client;
         _lastPutAt = Now();
