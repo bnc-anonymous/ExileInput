@@ -44,6 +44,8 @@ internal sealed class FakeStepIo : IStepIo
         _lead = leadKeys;
     }
 
+    public float JourneyProgress => _arriveAt == double.MaxValue || Ms >= _arriveAt ? float.NaN : (float)(1d - (_arriveAt - Ms) / 100d);
+
     public bool Arrived()
     {
         if (Ms < _arriveAt)
@@ -125,7 +127,7 @@ internal static class StepCases
     private static readonly Keys Ctrl = Keys.LControlKey;
     private static readonly Keys Alt = Keys.LMenu;
 
-    private static StepEvent Ev(Keys key, bool down, StepAnchor anchor) => new(key, down, anchor);
+    private static StepEvent Ev(Keys key, bool down, StepAnchor anchor, float from = 0f, float to = 1f) => new(key, down, anchor, from, to);
 
     private static StepEvent Click => new(Keys.LButton, true, StepAnchor.OnArrival);
 
@@ -485,6 +487,55 @@ internal static class StepCases
                 "from ctrl's down mark along the approach to the click, every point within 3px of the path",
                 $"{line.Count} points, furthest {offPath:0.0}px off the path",
                 "the line from a C partway along the approach to Faustus was grey, thin and straight: nearly invisible (the player, 2026-11-05)");
+        }
+
+        // 18. A key tapped en route goes down and up on the way, a Key Hold apart, before the cursor lands and clicks.
+        {
+            var plan = Plan(At(300, 200, Ev(Keys.V, true, StepAnchor.EnRoute, 0.1f, 0.2f), Ev(Keys.V, false, StepAnchor.EnRoute, 0.1f, 0.1f),
+                Click));
+            var io = new FakeStepIo();
+            var runner = new StepRunner(plan, io);
+
+            io.Run(runner, 400);
+            var down = io.When("down V");
+            var up = io.When("up V");
+            var press = io.When("press L");
+            var marks = plan.Timeline().Where(p => p.Input == Keys.V).ToList();
+            var span = plan.HeldSpans().SingleOrDefault(s => s.Key == Keys.V);
+            var path = plan.Journeys[0].Path;
+            var line = span.Key == Keys.V ? plan.HeldLine(span) : [];
+            var offPath = line.Count == 0 ? float.MaxValue : line.Max(p => Enumerable.Range(0, 201).Min(k => Vector2.Distance(path.At(k / 200f), p)));
+            var ok = io.Log.Take(4).SequenceEqual(["travel 1", "down V", "up V", "press L"]) && down is >= 11 and <= 21 &&
+                     up - down == 40 && up < 101 &&
+                     press >= 101 && marks.Count == 2 && marks.All(m => m.AtMs < 0f) && span.FromStop == 0 && span.ToStop == 0 &&
+                     offPath < 3f && runner.Phase == StepPhase.Done;
+
+            Report(ok, "18 A key tapped en route goes down and up on the way",
+                "travel, V down 10 to 20ms in (its window of the 100ms journey), V up 40ms later (the Key Hold) before landing at " +
+                "101, then the click; both marks before arrival, " +
+                "the held line along the path between them",
+                $"did {string.Join(", ", io.Log.Select((l, i) => $"{l}@{io.At[i]}"))}; marks {string.Join("/", marks.Select(m => m.AtMs))}; " +
+                $"line {line.Count} points, {offPath:0.0}px off; ended {runner.Phase}",
+                "a placement key tapped on the approach, as a player does: a tap ahead of a separate move lost the mode in PoE1 " +
+                "(AutoExpedition, 2026-11-07), and a plan could only let a key up on landing or later");
+        }
+
+        // 19. An en route Up due after landing goes on landing, and the click waits for it.
+        {
+            var plan = Plan(At(300, 200, Ev(Keys.V, true, StepAnchor.EnRoute, 1f, 1f), Ev(Keys.V, false, StepAnchor.EnRoute, 1f, 1f), Click));
+            var io = new FakeStepIo();
+            var runner = new StepRunner(plan, io);
+
+            io.Run(runner, 400);
+            var down = io.When("down V");
+            var up = io.When("up V");
+            var press = io.When("press L");
+            var ok = up - down == 40 && press >= up && runner.Phase == StepPhase.Done;
+
+            Report(ok, "19 An en route key still down on landing holds the click until it is up",
+                "V down at landing, up 40ms later, the click after it",
+                $"V down {down}, up {up}, click {press}, ended {runner.Phase}",
+                "a click going out with the tap's key still down is a click with that key held");
         }
 
         Console.WriteLine($"{cases - failed}/{cases} match");

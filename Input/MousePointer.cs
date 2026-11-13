@@ -349,6 +349,9 @@ internal sealed class MousePointer
     /// </summary>
     public bool ModifiersReady => _modifiersDown;
 
+    /// <summary>How far through its time the journey in hand is, 0 to 1; NaN with none under way. See StepRunner.EnRoute.</summary>
+    public float JourneyTimeShare => _travel?.Progress ?? float.NaN;
+
     /// <summary>Told that whatever the journey pressed has been released.</summary>
     public void ModifiersLetGo() => _modifiersDown = false;
 

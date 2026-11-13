@@ -35,6 +35,7 @@ Stop
   Hold        wait for the caller after the arrival events, before leaving
   Idle        while held: Still (default) or Wander (a loiter)
   ShortestMoveMs   as today
+  NoFlourishes  its journey without flourishes - no swerve wide, no overshoot; its usual curve stays (bridge version 5; flag 8)
 ```
 
 ```
@@ -45,6 +46,10 @@ Event
               OnArrival       - once landed (and past the Gate)
               AfterPress      - after this stop's button has come up (drawn from Modifier Timing), as modifiers come up now
               OnLeave         - as the journey to the next stop sets off
+              EnRoute         - during the journey, at a moment drawn from the event's window (bridge version 6)
+  Window      for EnRoute: From and To, shares of the journey's time (0 setting off, 1 landing); the moment is drawn
+              at random between them when the plan is made. Usual ones (client JourneyWindow): Anywhere 0-1,
+              Leaving 0-0.2, Midway 0.35-0.65, Approaching 0.6-0.85
 ```
 
 Rules:
@@ -66,6 +71,7 @@ The familiar gestures, written out:
 | Five ctrl+clicks | Ctrl Down BeforeArrival on the first; Left Down/Up on each; Ctrl Up AfterPress on the last |
 | Right click | Right Down/Up |
 | Alt rest on the market ratio | Alt Down OnArrival; Hold (still); Alt Up OnLeave |
+| A key tapped on the way in (a placement key) | V Down EnRoute (Approaching), V Up EnRoute: a Key Hold after the Down; then Left Down/Up |
 | Hover, no keys (heading somewhere early) | no events; Hold |
 | A loiter waiting on a ctrl+click | Ctrl Down BeforeArrival; Hold (Wander); Left Down/Up when continued; Ctrl Up AfterPress |
 

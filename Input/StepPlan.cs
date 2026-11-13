@@ -24,6 +24,14 @@ internal enum StepAnchor
 
     /// <summary>As the journey to the next stop sets off, or as the plan ends after the last.</summary>
     OnLeave = 3,
+
+    /// <summary>
+    /// During the journey, at a moment drawn when the plan is made from the event's window: a share of the journey's
+    /// time, 0 setting off and 1 landing (StepEvent.WindowFrom to WindowTo). An Up after a Down of the same key here
+    /// comes no sooner than a Key Hold after it, so a Down and an Up make a tap; one due after landing goes on landing,
+    /// and the Gate and arrival events wait for it. Bridge version 6.
+    /// </summary>
+    EnRoute = 4,
 }
 
 /// <summary>Where a step plan has got to. Crosses the bridge as an int.</summary>
@@ -44,7 +52,7 @@ internal enum StepPhase
 /// click, its button brought up after the Click Hold, so a button's Up is implied and one given is ignored, and a button
 /// goes down on arrival whatever anchor it names. Buttons never stay down across stops.
 /// </summary>
-internal readonly record struct StepEvent(Keys Input, bool Down, StepAnchor Anchor)
+internal readonly record struct StepEvent(Keys Input, bool Down, StepAnchor Anchor, float WindowFrom = 0f, float WindowTo = 1f)
 {
     public bool IsButton => Input is Keys.LButton or Keys.RButton;
 }
@@ -55,7 +63,8 @@ internal readonly record struct StepEvent(Keys Input, bool Down, StepAnchor Anch
 /// Gate: wait for the caller before the arrival events. Hold: wait for the caller after them. Wander: idle round the
 /// target while held rather than stay still. ShortestMoveMs: as PlanClicks', -1 for ExileInput's own.
 /// </summary>
-internal sealed record Stop(RectangleF Rect, Vector2 Point, StepEvent[] Events, bool Gate, bool Hold, bool Wander, int ShortestMoveMs)
+internal sealed record Stop(RectangleF Rect, Vector2 Point, StepEvent[] Events, bool Gate, bool Hold, bool Wander, int ShortestMoveMs,
+    bool NoFlourishes = false)
 {
     public bool PointGiven => !float.IsNaN(Point.X) && !float.IsNaN(Point.Y);
 
@@ -70,6 +79,9 @@ internal sealed record Stop(RectangleF Rect, Vector2 Point, StepEvent[] Events, 
     public Keys[] LeadKeys => Events.Where(e => !e.IsButton && e.Down && e.Anchor == StepAnchor.BeforeArrival).Select(e => e.Input).ToArray();
 
     public IEnumerable<StepEvent> KeysAt(StepAnchor anchor) => Events.Where(e => !e.IsButton && e.Anchor == anchor);
+
+    /// <summary>Whether any key goes down or up during the journey here (StepAnchor.EnRoute).</summary>
+    public bool HasEnRoute => Events.Any(e => !e.IsButton && e.Anchor == StepAnchor.EnRoute);
 }
 
 /// <summary>
@@ -101,6 +113,15 @@ internal sealed class StepPlan
     /// the first, for buttons and for BeforeArrival, whose keys go down together with the lead. See PacesOf.
     /// </summary>
     public readonly List<float[]> Paces = [];
+
+    /// <summary>
+    /// When a StepAnchor.EnRoute event happens: AtMs after setting off, as planned; and for an Up after a Down of its
+    /// key, After (that Down's event index, else -1) and AfterMs, the Key Hold it waits after that Down really went.
+    /// </summary>
+    internal readonly record struct EnRouteMoment(float AtMs, int After, float AfterMs);
+
+    /// <summary>Each stop's EnRoute moments, per event (AtMs NaN for any other event). See EnRouteMomentsOf.</summary>
+    public readonly List<EnRouteMoment[]> EnRoutes = [];
 
     public bool Show;
 
@@ -152,7 +173,7 @@ internal sealed class StepPlan
                 moving.Select(i => stops[i].PointGiven ? stops[i].Point : new Vector2(float.NaN, float.NaN)).ToArray(),
                 moving.Select(i => stops[i].RightButton).ToArray(),
                 moving.Select(i => stops[i].LeadKeys).ToArray(),
-                Show, timings.HoldMs, timings.ModifierMs, k => minMsOf(moving[k]), previous);
+                Show, timings.HoldMs, timings.ModifierMs, k => minMsOf(moving[k]), previous, noFlourishesOf: k => stops[moving[k]].NoFlourishes);
         var m = 0;
         var at = from;
 
@@ -183,10 +204,52 @@ internal sealed class StepPlan
 
             Journeys.Add(item);
             Paces.Add(PacesOf(stop.Events, timings));
+            EnRoutes.Add(EnRouteMomentsOf(pointer, stop, item, timings));
             at = item.To;
         }
 
         Stops.AddRange(stops);
+    }
+
+    /// <summary>
+    /// A stop's EnRoute moments: each at a point drawn at random within its window of the journey's time, the window's
+    /// ends put in order and kept within 0 to 1; an Up after a Down of its key in this stop no sooner than a Key Hold
+    /// after it. A Here stop's journey has no length, so its moments are all on arrival.
+    /// </summary>
+    private static EnRouteMoment[] EnRouteMomentsOf(MousePointer pointer, Stop stop, ClickPlan.Planned journey, Timings timings)
+    {
+        var moments = new EnRouteMoment[stop.Events.Length];
+        var lastDown = new Dictionary<Keys, int>();
+
+        for (var i = 0; i < stop.Events.Length; i++)
+        {
+            var e = stop.Events[i];
+
+            if (e.IsButton || e.Anchor != StepAnchor.EnRoute)
+            {
+                moments[i] = new EnRouteMoment(float.NaN, -1, 0f);
+                continue;
+            }
+
+            var from = Math.Clamp(Math.Min(e.WindowFrom, e.WindowTo), 0f, 1f);
+            var to = Math.Clamp(Math.Max(e.WindowFrom, e.WindowTo), 0f, 1f);
+            var at = journey.Path.Ms * (from + (to - from) * (float)pointer.Chance());
+
+            if (e.Down)
+            {
+                lastDown[e.Input] = i;
+                moments[i] = new EnRouteMoment(at, -1, 0f);
+            }
+            else if (lastDown.Remove(e.Input, out var down))
+            {
+                float hold = timings.KeyHoldMs();
+                moments[i] = new EnRouteMoment(Math.Max(at, moments[down].AtMs + hold), down, hold);
+            }
+            else
+                moments[i] = new EnRouteMoment(at, -1, 0f);
+        }
+
+        return moments;
     }
 
     /// <summary>The anchors whose keys go out one after another, paced like typing. BeforeArrival's go with the lead.</summary>
@@ -287,6 +350,16 @@ internal sealed class StepPlan
                     continue;
                 }
 
+                // During the journey: where the cursor is at its moment, or on the point for one due after landing.
+                if (e.Anchor == StepAnchor.EnRoute)
+                {
+                    var moment = EnRoutes[i][n].AtMs;
+
+                    placed.Add(new Placed(i, e.Input, e.Down, e.Anchor, moment - journey.Path.Ms,
+                        moment >= journey.Path.Ms ? journey.To : journey.Path.At(journey.Path.ProgressAt(moment)), false));
+                    continue;
+                }
+
                 var (at, where) = e.Anchor switch
                 {
                     StepAnchor.BeforeArrival when e.Down => (-(float)journey.LeadMs,
@@ -324,8 +397,10 @@ internal sealed class StepPlan
     public List<Held> HeldSpans()
     {
         var spans = new List<Held>();
+        // The journey's own events - a lead and anything EnRoute - by when they happen, before the arrival anchors.
         var keys = Timeline().Where(p => !p.Implied && p.Input is not (Keys.LButton or Keys.RButton))
-            .OrderBy(p => p.Stop).ThenBy(p => (int)p.Anchor).ToList();
+            .OrderBy(p => p.Stop).ThenBy(p => p.Anchor is StepAnchor.BeforeArrival or StepAnchor.EnRoute ? 0 : (int)p.Anchor)
+            .ThenBy(p => p.Anchor is StepAnchor.BeforeArrival or StepAnchor.EnRoute ? p.AtMs : 0f).ToList();
 
         for (var k = 0; k < keys.Count; k++)
         {
@@ -358,9 +433,23 @@ internal sealed class StepPlan
             if (Vector2.Distance(path.At(k / (float)samples), span.From) < Vector2.Distance(path.At(nearest / (float)samples), span.From))
                 nearest = k;
 
-        // On this approach and short of its end: the rest of the way to the stop.
+        // Where it comes up, when that is on the same approach (a tap, StepAnchor.EnRoute): the line stops there.
+        var until = samples;
+
+        if (span.ToStop == span.FromStop)
+        {
+            var upNearest = 0;
+
+            for (var k = 1; k <= samples; k++)
+                if (Vector2.Distance(path.At(k / (float)samples), span.To) < Vector2.Distance(path.At(upNearest / (float)samples), span.To))
+                    upNearest = k;
+
+            until = upNearest;
+        }
+
+        // On this approach and short of its end: the rest of the way to the stop, or to where it comes up.
         if (nearest < samples && Vector2.Distance(path.At(nearest / (float)samples), span.From) < 3f)
-            for (var k = nearest + 1; k <= samples; k++)
+            for (var k = nearest + 1; k <= until; k++)
                 points.Add(path.At(k / (float)samples));
 
         for (var i = span.FromStop + 1; i <= span.ToStop; i++)
@@ -505,7 +594,7 @@ internal sealed class StepPlan
             var label = button ? e.Input == Keys.RButton ? "R" : "L" : KeyLabel(e.Input);
             var offset = button ? Vector2.Zero : new Vector2(0f, -12f);
 
-            if (!button && e.Anchor != StepAnchor.BeforeArrival)
+            if (!button && e.Anchor is not (StepAnchor.BeforeArrival or StepAnchor.EnRoute))
             {
                 var x = e.Order == 0 ? 0f : across.GetValueOrDefault(e.Anchor);
 

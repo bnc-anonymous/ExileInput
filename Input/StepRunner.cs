@@ -16,6 +16,12 @@ internal interface IStepIo
     /// <summary>Whether the journey in hand has put the cursor on its point.</summary>
     bool Arrived();
 
+    /// <summary>
+    /// How far through its time the journey in hand is, 0 to 1 - nought while it waits to set off; NaN with none under
+    /// way. When EnRoute events go out.
+    /// </summary>
+    float JourneyProgress { get; }
+
     void KeyDown(Keys key);
 
     void KeyUp(Keys key);
@@ -60,6 +66,9 @@ internal sealed class StepRunner
     private bool _leaving;
     private TimeSpan _setOffAt;
     private int _hereLeadMs;
+
+    /// <summary>The stop's EnRoute events sent, by event index, and when. See EnRoute.</summary>
+    private readonly Dictionary<int, TimeSpan> _enRouteSent = [];
 
     /// <summary>The anchor whose keys are going out, how many have, when the last did, and since when one has waited on a modifier.</summary>
     private StepAnchor? _sequence;
@@ -197,6 +206,14 @@ internal sealed class StepRunner
                 }
 
                 if (stop.Here ? (now - _setOffAt).TotalMilliseconds < _hereLeadMs : !_io.Arrived())
+                {
+                    EnRoute(stop, now, false);
+                    return false;
+                }
+
+                // An EnRoute event not yet out - a tap's Up a Key Hold on - holds the stop here until it is: the Gate and
+                // the arrival keys come after it, as a hand's would.
+                if (!EnRoute(stop, now, true))
                     return false;
 
                 Phase = stop.Gate ? StepPhase.AtGate : StepPhase.Pressing;
@@ -297,8 +314,57 @@ internal sealed class StepRunner
         return false;
     }
 
+    /// <summary>
+    /// The stop's EnRoute events, in the order planned: each once the journey is as far through its time as the event's
+    /// moment is through the planned journey's - by the pointer's own clock, so a journey longer or shorter than planned,
+    /// or slowed by a stall, keeps its events at the same share of the way - or once landed; an Up after a Down also no
+    /// sooner than its Key Hold after the Down really went. True once all are out. A Down of a key the plan already holds
+    /// sends nothing; its Up lets the key go all the same.
+    /// </summary>
+    private bool EnRoute(Stop stop, TimeSpan now, bool landed)
+    {
+        if (!stop.HasEnRoute)
+            return true;
+
+        var moments = _plan.EnRoutes[Index];
+        var journeyMs = _plan.Journeys[Index].Path.Ms;
+        var progress = _io.JourneyProgress;
+        var all = true;
+
+        foreach (var i in Enumerable.Range(0, stop.Events.Length).Where(i => !float.IsNaN(moments[i].AtMs))
+                     .OrderBy(i => moments[i].AtMs))
+        {
+            if (_enRouteSent.ContainsKey(i))
+                continue;
+
+            var moment = moments[i];
+            var due = landed || journeyMs > 0f && !float.IsNaN(progress) && progress >= moment.AtMs / journeyMs;
+
+            if (due && moment.After >= 0)
+                due = _enRouteSent.TryGetValue(moment.After, out var downAt) && (now - downAt).TotalMilliseconds >= moment.AfterMs;
+
+            if (!due)
+            {
+                all = false;
+                continue;
+            }
+
+            var e = stop.Events[i];
+
+            if (e.Down)
+                Down(e.Input);
+            else
+                Up(e.Input);
+
+            _enRouteSent[i] = now;
+        }
+
+        return all;
+    }
+
     private void Reset()
     {
+        _enRouteSent.Clear();
         _setOff = false;
         _arrivalDone = false;
         _pressed = false;

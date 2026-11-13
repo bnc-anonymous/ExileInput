@@ -21,7 +21,7 @@ public partial class ExileInput
     private readonly List<(StepPlan Plan, int Index, DateTime Since)> _fadingSteps = new();
 
     /// <summary>Stop flags, as they cross the bridge.</summary>
-    private const int GateFlag = 1, HoldFlag = 2, WanderFlag = 4;
+    private const int GateFlag = 1, HoldFlag = 2, WanderFlag = 4, NoFlourishesFlag = 8;
 
     private void SaveStepMethods()
     {
@@ -37,6 +37,18 @@ public partial class ExileInput
             (string who, RectangleF[] rects, Vector2[] points, int[] eventCounts, Keys[] eventInputs, bool[] eventDowns,
                 int[] eventAnchors, int[] flags, int[] shortestMoveMs) =>
                 Gated(() => AddSteps(who, Stops(rects, points, eventCounts, eventInputs, eventDowns, eventAnchors, flags, shortestMoveMs))));
+        // The same with each event's window (bridge version 6): eventWindowFrom and eventWindowTo, shares of the journey's
+        // time for a StepAnchor.EnRoute event, ignored for the rest. See StepEvent.
+        b.SaveMethod("ExileInput.PlanStepsWithWindows",
+            (string who, RectangleF[] rects, Vector2[] points, int[] eventCounts, Keys[] eventInputs, bool[] eventDowns,
+                int[] eventAnchors, float[] eventWindowFrom, float[] eventWindowTo, int[] flags, int[] shortestMoveMs, bool show) =>
+                Gated(() => PlanSteps(who, Stops(rects, points, eventCounts, eventInputs, eventDowns, eventAnchors, flags, shortestMoveMs,
+                    eventWindowFrom, eventWindowTo), show)));
+        b.SaveMethod("ExileInput.AddStepsWithWindows",
+            (string who, RectangleF[] rects, Vector2[] points, int[] eventCounts, Keys[] eventInputs, bool[] eventDowns,
+                int[] eventAnchors, float[] eventWindowFrom, float[] eventWindowTo, int[] flags, int[] shortestMoveMs) =>
+                Gated(() => AddSteps(who, Stops(rects, points, eventCounts, eventInputs, eventDowns, eventAnchors, flags, shortestMoveMs,
+                    eventWindowFrom, eventWindowTo))));
         b.SaveMethod("ExileInput.Proceed", (string who) => Gated(() => ProceedSteps(who)));
 
         // Where the plan is: the stop in hand and the phase, as ints (StepPhase); why it was dropped, read apart.
@@ -47,7 +59,7 @@ public partial class ExileInput
 
     /// <summary>The stops from their flattened arrays; null when they do not add up.</summary>
     private static List<Stop> Stops(RectangleF[] rects, Vector2[] points, int[] eventCounts, Keys[] eventInputs, bool[] eventDowns,
-        int[] eventAnchors, int[] flags, int[] shortestMoveMs)
+        int[] eventAnchors, int[] flags, int[] shortestMoveMs, float[] eventWindowFrom = null, float[] eventWindowTo = null)
     {
         rects ??= [];
         points ??= [];
@@ -71,14 +83,16 @@ public partial class ExileInput
             var events = new StepEvent[n];
 
             for (var k = 0; k < n; k++, e++)
-                events[k] = new StepEvent(eventInputs[e], eventDowns[e], (StepAnchor)Math.Clamp(eventAnchors[e], 0, 3));
+                events[k] = new StepEvent(eventInputs[e], eventDowns[e], (StepAnchor)Math.Clamp(eventAnchors[e], 0, 4),
+                    eventWindowFrom != null && e < eventWindowFrom.Length ? eventWindowFrom[e] : 0f,
+                    eventWindowTo != null && e < eventWindowTo.Length ? eventWindowTo[e] : 1f);
 
             var flag = i < flags.Length ? flags[i] : 0;
 
             stops.Add(new Stop(i < rects.Length ? rects[i] : default,
                 i < points.Length ? points[i] : new Vector2(float.NaN, float.NaN), events,
                 (flag & GateFlag) != 0, (flag & HoldFlag) != 0, (flag & WanderFlag) != 0,
-                shortestMoveMs != null && i < shortestMoveMs.Length ? shortestMoveMs[i] : -1));
+                shortestMoveMs != null && i < shortestMoveMs.Length ? shortestMoveMs[i] : -1, (flag & NoFlourishesFlag) != 0));
         }
 
         return stops;
@@ -141,8 +155,18 @@ public partial class ExileInput
         () => HumanTiming.Ms(Settings.UsedModifierTiming), () => HumanTiming.Ms(Settings.UsedKeyHold),
         () => HumanTiming.Ms(Settings.UsedKeyGap));
 
-    private bool ProceedSteps(string who) =>
-        _lease.Held(who) && _steps.TryGetValue(who, out var running) && running.Runner.Proceed();
+    /// <summary>
+    /// Past the Gate or Hold the caller's step plan waits at, and run on at once: the click or keys at the Gate go out in
+    /// this call rather than at the next tick, a frame later.
+    /// </summary>
+    private bool ProceedSteps(string who)
+    {
+        if (!_lease.Held(who) || !_steps.TryGetValue(who, out var running) || !running.Runner.Proceed())
+            return false;
+
+        running.Runner.Step();
+        return true;
+    }
 
     /// <summary>The stop in hand and the phase; [0, None] with no plan.</summary>
     private int[] StepState(string who) =>
@@ -236,6 +260,8 @@ public partial class ExileInput
         }
 
         public bool Arrived() => plugin.PointerFor(who).Arrived();
+
+        public float JourneyProgress => plugin.PointerFor(who).JourneyTimeShare;
 
         public void KeyDown(Keys key) => plugin.KeysFor(who).Hold(key);
 

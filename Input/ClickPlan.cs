@@ -87,7 +87,7 @@ internal sealed class ClickPlan
     /// by a first click here that holds the same. See Extend.</param>
     public static ClickPlan Make(MousePointer pointer, Vector2 cursor, IReadOnlyList<RectangleF> rects, IReadOnlyList<Vector2> points,
         IReadOnlyList<bool> rights, IReadOnlyList<Keys[]> modifiers, bool show, Func<int> holdMs, Func<int> modifierMs,
-        Func<int, float> minMsOf, Vector2? previous = null, Keys[] modifiersBefore = null)
+        Func<int, float> minMsOf, Vector2? previous = null, Keys[] modifiersBefore = null, Func<int, bool> noFlourishesOf = null)
     {
         var plan = new ClickPlan { Show = show };
         var from = cursor;
@@ -137,7 +137,10 @@ internal sealed class ClickPlan
 
             // **A swoop, now and then**: both controls pushed out to the side the way was already turning, and the time
             // stretched as the duration's rule would have it for the longer way, so the cursor does not whip round it.
-            if (perRootPx > 0 && length >= SwoopShortestPx && pointer.Chance() < SwoopChance)
+            // A journey asked for no flourishes (a step plan's NoFlourishes stop) has no swoop and no overshoot.
+            var flourish = !(noFlourishesOf?.Invoke(i) ?? false);
+
+            if (flourish && perRootPx > 0 && length >= SwoopShortestPx && pointer.Chance() < SwoopChance)
             {
                 var incoming = from - before2;
                 var turning = incoming.X * line.Y - incoming.Y * line.X;
@@ -167,7 +170,7 @@ internal sealed class ClickPlan
             }
 
             // **An overshoot, now and then**: past the target along the way the curve arrives, and back onto it.
-            if (perRootPx > 0 && length >= OvershootShortestPx && pointer.Chance() < OvershootChance)
+            if (flourish && perRootPx > 0 && length >= OvershootShortestPx && pointer.Chance() < OvershootChance)
             {
                 var arriving = to - control2;
                 var heading = arriving.Length() > 1f ? Vector2.Normalize(arriving) : line / length;

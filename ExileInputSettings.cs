@@ -129,13 +129,16 @@ public class ExileInputSettings : ISettings
         "they go out in order, paced like typing. This is the shortest a key is held down\n" +
         "between its press and its release. Each is drawn afresh between Shortest and Longest,\n" +
         "most often near Usual.")]
-    public RangeNode<int> KeyHoldShortestMs { get; set; } = new RangeNode<int>(30, 0, 300);
+    // **Above one game tick of about 33ms, with room for the seed's 5%.** At 30/40/60, PoE1's placement key tapped during
+    // a move often did not take, or took and dropped at once; at 40/50/70 it took every time (AutoExpedition,
+    // 2026-11-07). The tick as the reason is the player's suspicion, not measured.
+    public RangeNode<int> KeyHoldShortestMs { get; set; } = new RangeNode<int>(40, 0, 300);
 
     [Menu("Key Hold Usual (ms)", "The most common time a key typed in a planned step is held down.")]
-    public RangeNode<int> KeyHoldUsualMs { get; set; } = new RangeNode<int>(40, 0, 300);
+    public RangeNode<int> KeyHoldUsualMs { get; set; } = new RangeNode<int>(50, 0, 300);
 
     [Menu("Key Hold Longest (ms)", "The longest a key typed in a planned step is held down.")]
-    public RangeNode<int> KeyHoldLongestMs { get; set; } = new RangeNode<int>(60, 0, 300);
+    public RangeNode<int> KeyHoldLongestMs { get; set; } = new RangeNode<int>(70, 0, 300);
 
     [Menu("Key Gap Shortest (ms)",
         "The shortest time between one key typed in a planned step coming up and the next going\n" +

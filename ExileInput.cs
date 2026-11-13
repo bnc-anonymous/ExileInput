@@ -49,8 +49,13 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     /// 3: step plans - PlanSteps, AddSteps, Proceed, StepState, StepWhy, AbandonSteps. See docs/plan-steps.md.
     /// 4: SwallowedKey. While this plugin holds Ctrl, Shift or Alt for a caller, the player's key presses are swallowed
     /// and stop the holder with PlayerPressedAKey, naming the key. See KeyGuard and StopForSwallowedKeys.
+    /// 5: the NoFlourishes stop flag (8). A step plan's stop can ask for its journey without flourishes (Travel.Flourish:
+    /// a swerve wide, an overshoot).
+    /// 6: the EnRoute step anchor (4): a key down or up during the journey, at a moment drawn from its window of the
+    /// journey's time - PlanStepsWithWindows and AddStepsWithWindows carry the windows. An older version reads anchor 4 as
+    /// OnLeave, so the client refuses a plan using it there.
     /// </summary>
-    public const int BridgeVersion = 4;
+    public const int BridgeVersion = 6;
 
     public override bool Initialise()
     {
@@ -1886,11 +1891,19 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
                         StopForSwallowedKeys();
                         Buttons.Step();
 
-                        if (_lease.Holder is { } driving && _pointers.TryGetValue(driving, out var pointer) && pointer.MovedElsewhere)
+                        if (_lease.Holder is { } driving && _pointers.TryGetValue(driving, out var pointer))
                         {
-                            pointer.MoveAlong();
-                            ClickIfArrived(driving, pointer);
-                            StepSteps(driving);
+                            if (pointer.MovedElsewhere)
+                            {
+                                pointer.MoveAlong();
+                                ClickIfArrived(driving, pointer);
+                            }
+
+                            // A step plan steps here whenever it runs, not only while the cursor moves: one waiting for its
+                            // button to come up sets off for the next stop the moment it does, as a click plan's next move
+                            // does, rather than at the next tick.
+                            if (pointer.MovedElsewhere || _steps.ContainsKey(driving))
+                                StepSteps(driving);
                         }
                     }
                 }

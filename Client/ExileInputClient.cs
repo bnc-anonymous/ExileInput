@@ -74,6 +74,8 @@ public sealed class ExileInputClient
     private Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool> _extendPlan;
     private Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], int[], int[], bool, bool> _planSteps;
     private Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], int[], int[], bool> _addSteps;
+    private Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], float[], float[], int[], int[], bool, bool> _planStepsWithWindows;
+    private Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], float[], float[], int[], int[], bool> _addStepsWithWindows;
     private Func<string, bool> _proceed;
     private Func<string, int[]> _stepState;
     private Func<string, string> _stepWhy;
@@ -216,6 +218,11 @@ public sealed class ExileInputClient
             // Step plans (bridge version 3); null against an older ExileInput, and every call then answers false.
             _planSteps = b.GetMethod<Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], int[], int[], bool, bool>>("ExileInput.PlanSteps");
             _addSteps = b.GetMethod<Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], int[], int[], bool>>("ExileInput.AddSteps");
+            // Events with windows, for StepAnchor.EnRoute (bridge version 6); null against an older ExileInput.
+            _planStepsWithWindows = b.GetMethod<Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], float[], float[], int[], int[], bool, bool>>(
+                "ExileInput.PlanStepsWithWindows");
+            _addStepsWithWindows = b.GetMethod<Func<string, RectangleF[], Vector2[], int[], Keys[], bool[], int[], float[], float[], int[], int[], bool>>(
+                "ExileInput.AddStepsWithWindows");
             _proceed = b.GetMethod<Func<string, bool>>("ExileInput.Proceed");
             _stepState = b.GetMethod<Func<string, int[]>>("ExileInput.StepState");
             _stepWhy = b.GetMethod<Func<string, string>>("ExileInput.StepWhy");
@@ -656,6 +663,34 @@ public sealed class ExileInputClient
 
         /// <summary>As the journey to the next stop sets off, or as the plan ends after the last.</summary>
         OnLeave = 3,
+
+        /// <summary>
+        /// During the journey, at a moment drawn when the plan is made from the event's window (StepEvent.WindowFrom to
+        /// WindowTo): a share of the journey's time, 0 setting off and 1 landing - see JourneyWindow for the usual ones.
+        /// An Up after a Down of the same key here comes no sooner than a Key Hold after it, so a Down and an Up make a
+        /// tap (PlannedStop.Tap); one due after landing goes on landing, and the Gate and arrival events wait for it.
+        /// Needs BridgeVersion 6: an older input plugin turns a plan using it down (false).
+        /// </summary>
+        EnRoute = 4,
+    }
+
+    /// <summary>The usual windows of a journey for a StepAnchor.EnRoute event, as shares of its time.</summary>
+    public static class JourneyWindow
+    {
+        /// <summary>Any moment of the journey.</summary>
+        public static readonly (float From, float To) Anywhere = (0f, 1f);
+
+        /// <summary>Soon after setting off.</summary>
+        public static readonly (float From, float To) Leaving = (0f, 0.2f);
+
+        /// <summary>Late in the journey, early enough that a tap is up again before landing on most journeys.</summary>
+        public static readonly (float From, float To) Approaching = (0.6f, 0.85f);
+
+        /// <summary>
+        /// About the middle of the journey. By time: a journey speeds up from rest and slows into its target, so this is
+        /// roughly 30 to 70% of the way, where Approaching is the last third, the cursor already slowing.
+        /// </summary>
+        public static readonly (float From, float To) Midway = (0.35f, 0.65f);
     }
 
     /// <summary>Where a step plan has got to.</summary>
@@ -677,19 +712,21 @@ public sealed class ExileInputClient
     /// keys at one anchor (OnArrival, AfterPress or OnLeave) go out in the order given, paced like typing: a Key Hold
     /// between a key's Down and its Up, a Key Gap between one key's Up and the next one's Down, and Modifier Timing after a
     /// modifier's Down before the first key it holds and before its Up after the last. A key with no Up stays held.
-    /// BeforeArrival's keys go down together, with the lead.
+    /// BeforeArrival's keys go down together, with the lead. WindowFrom and WindowTo are read for EnRoute alone.
     /// </summary>
-    public readonly record struct StepEvent(Keys Input, bool Down, StepAnchor Anchor);
+    public readonly record struct StepEvent(Keys Input, bool Down, StepAnchor Anchor, float WindowFrom = 0f, float WindowTo = 1f);
 
     /// <summary>
     /// One stop: a journey to the point (where given, not NaN) or else the rectangle, and its events. With neither - a NaN
     /// point and an empty rectangle, as PlannedStop.Here makes - no journey: keys where the cursor is. Gate: the plan waits
     /// for Proceed before the arrival events - to check what is under the cursor. Hold: it waits for Proceed after them,
     /// keys held - until a price loads, say. Wander: idle round the target while held rather than stay still.
-    /// ShortestMoveMs: -1 for the input plugin's own.
+    /// ShortestMoveMs: -1 for the input plugin's own. NoFlourishes: its journey without the flourishes planned journeys
+    /// make now and then - a swerve wide, an overshoot and settle back - its usual gentle curve kept; an older input
+    /// plugin (before BridgeVersion 5) ignores it.
     /// </summary>
     public sealed record PlannedStop(RectangleF Rect, Vector2 Point, StepEvent[] Events, bool Gate = false, bool Hold = false,
-        bool Wander = false, int ShortestMoveMs = -1)
+        bool Wander = false, int ShortestMoveMs = -1, bool NoFlourishes = false)
     {
         /// <summary>A stop at a rectangle, landing where the input plugin would aim in it.</summary>
         public static PlannedStop At(RectangleF rect, params StepEvent[] events) => new(rect, new Vector2(float.NaN, float.NaN), events);
@@ -702,6 +739,16 @@ public sealed class ExileInputClient
         /// done with. Needs an input plugin with key sequences; an older one turns the plan down (false).
         /// </summary>
         public static PlannedStop Here(params StepEvent[] events) => new(default, new Vector2(float.NaN, float.NaN), events);
+
+        /// <summary>
+        /// A key tapped during the journey: down at a moment in the window (JourneyWindow.Approaching, say), up a Key Hold
+        /// later. Needs BridgeVersion 6. See StepAnchor.EnRoute.
+        /// </summary>
+        public static StepEvent[] Tap(Keys key, (float From, float To) window) =>
+        [
+            new(key, true, StepAnchor.EnRoute, window.From, window.To),
+            new(key, false, StepAnchor.EnRoute, window.From, window.From),
+        ];
 
         /// <summary>
         /// Keys typed as a chord: the modifiers down, then each key down and up in turn, then the modifiers up, all on
@@ -747,7 +794,13 @@ public sealed class ExileInputClient
     {
         Look();
         var f = Flatten(stops);
-        return _planSteps?.Invoke(_me, f.Rects, f.Points, f.Counts, f.Inputs, f.Downs, f.Anchors, f.Flags, f.Shortest, show) ?? false;
+
+        if (_planStepsWithWindows != null)
+            return _planStepsWithWindows(_me, f.Rects, f.Points, f.Counts, f.Inputs, f.Downs, f.Anchors, f.WindowFrom, f.WindowTo,
+                f.Flags, f.Shortest, show);
+
+        // An older input plugin reads EnRoute as OnLeave: a key meant for the way there would go down as the cursor left.
+        return !f.EnRoute && (_planSteps?.Invoke(_me, f.Rects, f.Points, f.Counts, f.Inputs, f.Downs, f.Anchors, f.Flags, f.Shortest, show) ?? false);
     }
 
     /// <summary>Stops added to the end of the step plan, going on from its last journey and the keys it holds.</summary>
@@ -755,7 +808,12 @@ public sealed class ExileInputClient
     {
         Look();
         var f = Flatten(stops);
-        return _addSteps?.Invoke(_me, f.Rects, f.Points, f.Counts, f.Inputs, f.Downs, f.Anchors, f.Flags, f.Shortest) ?? false;
+
+        if (_addStepsWithWindows != null)
+            return _addStepsWithWindows(_me, f.Rects, f.Points, f.Counts, f.Inputs, f.Downs, f.Anchors, f.WindowFrom, f.WindowTo,
+                f.Flags, f.Shortest);
+
+        return !f.EnRoute && (_addSteps?.Invoke(_me, f.Rects, f.Points, f.Counts, f.Inputs, f.Downs, f.Anchors, f.Flags, f.Shortest) ?? false);
     }
 
     /// <summary>Past the Gate or Hold the step plan waits at; false when it waits at neither.</summary>
@@ -783,8 +841,8 @@ public sealed class ExileInputClient
     }
 
     /// <summary>Stops as the bridge carries them: arrays, each stop's events the next Counts[i] of the event arrays.</summary>
-    private static (RectangleF[] Rects, Vector2[] Points, int[] Counts, Keys[] Inputs, bool[] Downs, int[] Anchors, int[] Flags,
-        int[] Shortest) Flatten(PlannedStop[] stops)
+    private static (RectangleF[] Rects, Vector2[] Points, int[] Counts, Keys[] Inputs, bool[] Downs, int[] Anchors, float[] WindowFrom,
+        float[] WindowTo, int[] Flags, int[] Shortest, bool EnRoute) Flatten(PlannedStop[] stops)
     {
         stops ??= [];
         var events = stops.SelectMany(s => s.Events ?? []).ToArray();
@@ -792,8 +850,9 @@ public sealed class ExileInputClient
         return (stops.Select(s => s.Rect).ToArray(), stops.Select(s => s.Point).ToArray(),
             stops.Select(s => s.Events?.Length ?? 0).ToArray(), events.Select(e => e.Input).ToArray(),
             events.Select(e => e.Down).ToArray(), events.Select(e => (int)e.Anchor).ToArray(),
-            stops.Select(s => (s.Gate ? 1 : 0) | (s.Hold ? 2 : 0) | (s.Wander ? 4 : 0)).ToArray(),
-            stops.Select(s => s.ShortestMoveMs).ToArray());
+            events.Select(e => e.WindowFrom).ToArray(), events.Select(e => e.WindowTo).ToArray(),
+            stops.Select(s => (s.Gate ? 1 : 0) | (s.Hold ? 2 : 0) | (s.Wander ? 4 : 0) | (s.NoFlourishes ? 8 : 0)).ToArray(),
+            stops.Select(s => s.ShortestMoveMs).ToArray(), events.Any(e => e.Anchor == StepAnchor.EnRoute));
     }
 
     /// <summary>
