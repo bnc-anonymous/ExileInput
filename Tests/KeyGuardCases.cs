@@ -12,18 +12,22 @@ namespace ExileInput.Tests;
 /// </summary>
 internal static class KeyGuardCases
 {
-    /// <summary>One key event: the key, down or up, sent by ExileInput or not, a modifier held, already down to Windows, and the time.</summary>
-    private sealed record Event(Keys Key, bool Down, bool Own, bool Held, bool AlreadyDown, long At, KeyVerdict Want);
+    /// <summary>
+    /// One key event: the key, down or up, sent by ExileInput or not, a modifier held, already down to Windows, allowed by
+    /// the holder (AllowPlayerKeys), and the time.
+    /// </summary>
+    private sealed record Event(Keys Key, bool Down, bool Own, bool Held, bool AlreadyDown, bool Allowed, long At, KeyVerdict Want);
 
     private static readonly KeyVerdict Pass = KeyVerdict.Pass;
     private static readonly KeyVerdict SwallowStop = new(true, true);
     private static readonly KeyVerdict Swallow = new(true, false);
 
-    private static Event Down(Keys key, bool held, KeyVerdict want, long at = 0, bool own = false, bool alreadyDown = false) =>
-        new(key, true, own, held, alreadyDown, at, want);
+    private static Event Down(Keys key, bool held, KeyVerdict want, long at = 0, bool own = false, bool alreadyDown = false,
+        bool allowed = false) =>
+        new(key, true, own, held, alreadyDown, allowed, at, want);
 
-    private static Event Up(Keys key, bool held, KeyVerdict want, long at = 0, bool own = false) =>
-        new(key, false, own, held, false, at, want);
+    private static Event Up(Keys key, bool held, KeyVerdict want, long at = 0, bool own = false, bool allowed = false) =>
+        new(key, false, own, held, false, allowed, at, want);
 
     internal static int Run()
     {
@@ -59,6 +63,21 @@ internal static class KeyGuardCases
                     Up(Keys.Return, false, Swallow)]),
             ("10 An up of a key never swallowed passes", "a key pressed before any modifier must come up in the game",
                 [Up(Keys.Space, true, Pass)]),
+            ("11 Shift held, Alt allowed: the player's Alt passes, down, repeats and up, and stops nothing",
+                "CraftUntilHighlighted's player reads the advanced description under its held Shift",
+                [Down(Keys.LMenu, true, Pass, 0, allowed: true), Down(Keys.LMenu, true, Pass, 30, allowed: true),
+                    Up(Keys.LMenu, true, Pass, 60, allowed: true)]),
+            ("12 Alt allowed: F4 pressed under it is still swallowed and stops the holder",
+                "allowing Alt must not make Alt+F4 possible",
+                [Down(Keys.LMenu, true, Pass, 0, allowed: true), Down(Keys.F4, true, SwallowStop, 10), Up(Keys.F4, true, Swallow, 20),
+                    Up(Keys.LMenu, true, Pass, 30, allowed: true)]),
+            ("13 A press swallowed before Alt was allowed: its repeats and up stay swallowed",
+                "nothing may see the rest of a keystroke whose down it never saw",
+                [Down(Keys.LMenu, true, SwallowStop, 0), Down(Keys.LMenu, true, SwallowStop, 30, allowed: true),
+                    Up(Keys.LMenu, true, Swallow, 60, allowed: true)]),
+            ("14 Alt allowed, already down when Shift went down: it passes, and so does its up",
+                "the player was already holding Alt as the run began",
+                [Down(Keys.LMenu, true, Pass, 0, alreadyDown: true, allowed: true), Up(Keys.LMenu, true, Pass, 30, allowed: true)]),
         };
 
         var failed = 0;
@@ -71,7 +90,7 @@ internal static class KeyGuardCases
 
             foreach (var e in events)
             {
-                var verdict = guard.OnKey((int)e.Key, e.Down, e.Own, e.Held, e.AlreadyDown, e.At);
+                var verdict = guard.OnKey((int)e.Key, e.Down, e.Own, e.Held, e.AlreadyDown, e.Allowed, e.At);
 
                 ok &= verdict == e.Want;
                 got.Add($"{e.Key}{(e.Down ? "v" : "^")}={Said(verdict)}{(verdict == e.Want ? "" : $"(want {Said(e.Want)})")}");
@@ -97,7 +116,7 @@ internal static class KeyGuardCases
         if (!sorted)
             failed++;
 
-        Console.WriteLine($"{(sorted ? "  ok  " : "FAIL  ")}11 Ctrl, Shift and Alt, either side or generic, are what is guarded for; nothing else");
+        Console.WriteLine($"{(sorted ? "  ok  " : "FAIL  ")}15 Ctrl, Shift and Alt, either side or generic, are what is guarded for; nothing else");
         Console.WriteLine("        why   the stop lets these go; F4, Enter or the Windows key are not held for a caller");
         Console.WriteLine();
 

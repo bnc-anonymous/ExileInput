@@ -22,6 +22,13 @@ internal readonly record struct KeyVerdict(bool Swallow, bool StopHolder)
 /// keyboard layout and is half of Ctrl+Shift+Esc; Alt+Shift switches it too; the Windows key opens Start. A player who
 /// touches the keyboard while the plugin holds a modifier is taking over, as a moved mouse is.
 ///
+/// **Unless the holder asks for a key.** The caller holding the cursor can name keys the player may press under its
+/// modifiers (ExileInput.AllowPlayerKeys) - Alt, so the player can read an item's advanced description while
+/// CraftUntilHighlighted holds Shift. Such a key passes, down, repeats and up, and stops nobody; what it makes with the
+/// held modifier is then Windows' and the game's to act on, which the caller has taken on by asking. A press swallowed
+/// before the key was allowed keeps its repeats and up swallowed. A modifier ExileInput holds itself is never allowed
+/// (KeyWatch), since the player's up of it would let go of ExileInput's own.
+///
 /// **No half keystrokes.** A key whose down was swallowed has its repeats and its up swallowed too, until the up, even
 /// once the modifiers are let go, so nothing ever sees an up without its down, or a repeat of a press it never saw - a
 /// held F4 must not go on as F4 the moment Alt is up. A key already down to Windows when the modifier went down - the
@@ -48,9 +55,10 @@ internal sealed class KeyGuard
     /// <summary>
     /// The verdict on one key event, remembering what it must: key, a virtual-key code; down, a press or repeat, else an up;
     /// own, sent by ExileInput; modifierHeld, ExileInput holding Ctrl, Shift or Alt now; alreadyDown, the key down to
-    /// Windows before this event (asked only of a down); now, in milliseconds.
+    /// Windows before this event (asked only of a down); allowed, a key the holder lets the player press under its
+    /// modifiers (ExileInput.AllowPlayerKeys); now, in milliseconds.
     /// </summary>
-    public KeyVerdict OnKey(int key, bool down, bool own, bool modifierHeld, bool alreadyDown, long now)
+    public KeyVerdict OnKey(int key, bool down, bool own, bool modifierHeld, bool alreadyDown, bool allowed, long now)
     {
         if (own)
             return KeyVerdict.Pass;
@@ -65,6 +73,11 @@ internal sealed class KeyGuard
 
         if (modifierHeld)
         {
+            // A key the holder allows reaches Windows and stops nobody - unless this is a repeat of a press swallowed
+            // before it was allowed, which stays swallowed with its press.
+            if (allowed && !swallowedDown)
+                return KeyVerdict.Pass;
+
             // Its up is swallowed too, unless Windows saw its down before: then the up must reach the game.
             if (swallowedDown || !alreadyDown)
                 _swallowed[key] = now;

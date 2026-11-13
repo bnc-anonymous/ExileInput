@@ -68,6 +68,7 @@ public sealed class ExileInputClient
     private Func<string, int, bool> _setMoveTimePerRootPixel;
     private Func<string, int, bool, bool> _ignorePlayerMouse;
     private Func<string, Keys[], bool> _stopOnPlayerKeys;
+    private Func<string, Keys[], bool> _allowPlayerKeys;
     private Func<string, int, bool, Keys, bool> _blockPlayerKeys;
     private Func<string, bool> _keyBlockCancelled;
     private Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool, bool> _planClicks;
@@ -211,6 +212,8 @@ public sealed class ExileInputClient
             _setMoveTimePerRootPixel = b.GetMethod<Func<string, int, bool>>("ExileInput.SetMoveTimePerRootPixel");
             _ignorePlayerMouse = b.GetMethod<Func<string, int, bool, bool>>("ExileInput.IgnorePlayerMouse");
             _stopOnPlayerKeys = b.GetMethod<Func<string, Keys[], bool>>("ExileInput.StopOnPlayerKeys");
+            // Bridge version 7; null against an older ExileInput, and the call then answers false.
+            _allowPlayerKeys = b.GetMethod<Func<string, Keys[], bool>>("ExileInput.AllowPlayerKeys");
             _blockPlayerKeys = b.GetMethod<Func<string, int, bool, Keys, bool>>("ExileInput.BlockPlayerKeys");
             _keyBlockCancelled = b.GetMethod<Func<string, bool>>("ExileInput.KeyBlockCancelled");
             _planClicks = b.GetMethod<Func<string, RectangleF[], Vector2[], bool[], Keys[][], int[], bool, bool>>("ExileInput.PlanClicks");
@@ -594,12 +597,28 @@ public sealed class ExileInputClient
     /// with "PlayerPressedAKey", as moving the mouse does; keys sent through ExileInput do not count. Cleared on
     /// release, so ask again after each Take. Needs the cursor taken. False from an ExileInput too old to have it.
     /// Whether asked or not, a key pressed while ExileInput holds a modifier for this plugin is swallowed and stops it,
-    /// the except list notwithstanding. See SwallowedKey.
+    /// the except list notwithstanding, unless AllowPlayerKeys names it. See SwallowedKey.
     /// </summary>
     public bool StopOnPlayerKeys(Keys[] except)
     {
         Look();
         return _stopOnPlayerKeys?.Invoke(_me, except) ?? false;
+    }
+
+    /// <summary>
+    /// Until this caller releases the cursor or is stopped, these keys of the player's pass while ExileInput holds Ctrl,
+    /// Shift or Alt for it: they reach Windows and the game and do not stop it, where every other key is swallowed and
+    /// stops it with "PlayerPressedAKey" (see SwallowedKey). For a key the player is expected to press mid-run, such as
+    /// Alt to read an item's advanced description under a held Shift; what the key makes with the held modifier is then
+    /// the game's and Windows' to act on. A generic modifier (Keys.Menu) names both sides. A modifier ExileInput is itself
+    /// holding never passes. None clears them. Cleared on release, so ask again after each Take; ask before Hold to cover
+    /// a key the player already has down. Needs the cursor taken. False from an ExileInput too old to have it (bridge
+    /// version below 7).
+    /// </summary>
+    public bool AllowPlayerKeys(Keys[] keys)
+    {
+        Look();
+        return _allowPlayerKeys?.Invoke(_me, keys ?? []) ?? false;
     }
 
     /// <summary>

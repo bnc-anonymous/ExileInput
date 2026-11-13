@@ -54,8 +54,10 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     /// 6: the EnRoute step anchor (4): a key down or up during the journey, at a moment drawn from its window of the
     /// journey's time - PlanStepsWithWindows and AddStepsWithWindows carry the windows. An older version reads anchor 4 as
     /// OnLeave, so the client refuses a plan using it there.
+    /// 7: AllowPlayerKeys. Keys the holder names pass while this plugin holds a modifier for it, neither swallowed nor
+    /// stopping it. See KeyGuard.
     /// </summary>
-    public const int BridgeVersion = 6;
+    public const int BridgeVersion = 7;
 
     public override bool Initialise()
     {
@@ -257,6 +259,10 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         // See StopOnPlayerKeys.
         b.SaveMethod("ExileInput.StopOnPlayerKeys", (string who, Keys[] except) => Gated(() => StopOnPlayerKeys(who, except)));
 
+        // For this claim, keys the player may press while ExileInput holds a modifier for the caller: they reach the game
+        // and stop nothing. See AllowPlayerKeys.
+        b.SaveMethod("ExileInput.AllowPlayerKeys", (string who, Keys[] keys) => Gated(() => AllowPlayerKeys(who, keys)));
+
         // For a pickup that must not be walked away from: the player's held keys let go and their key presses dropped for
         // this long, 0 to end it, and optionally the held keys pressed again at the end; a press of cancelKey ends it
         // early. See BlockPlayerKeys.
@@ -340,6 +346,10 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         {
             PointerFor(who).Fresh();
             _swallowedKeys.Remove(who);
+
+            // Keys another caller let through, its claim having lapsed without Tick seeing it end, are not this one's.
+            if (!string.Equals(_playerKeysAllowedFor, who, StringComparison.OrdinalIgnoreCase))
+                ForgetAllowedPlayerKeys(_playerKeysAllowedFor);
         }
 
         return true;
@@ -930,6 +940,58 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
     }
 
     /// <summary>
+    /// Until the caller releases the cursor or is stopped, these keys of the player's pass while this plugin holds Ctrl,
+    /// Shift or Alt for it: they reach Windows and the game and stop nothing, where every other key is swallowed and stops
+    /// the holder (KeyGuard). For a key the player is expected to press mid-run, such as Alt to read an item's advanced
+    /// description under a held Shift. A generic modifier names both sides. None clears them. Cleared on release, so each
+    /// claim asks again. Needs the cursor taken. See KeyWatch.AllowUnderModifiers.
+    /// </summary>
+    private bool AllowPlayerKeys(string who, Keys[] keys)
+    {
+        if (!_lease.Held(who))
+            return false;
+
+        var codes = new HashSet<int>();
+
+        foreach (var key in keys ?? [])
+        {
+            var code = key & Keys.KeyCode;
+
+            codes.Add((int)code);
+
+            // The generic code and both sides, so the set matches whichever the hook reports.
+            Keys[] sides = code switch
+            {
+                Keys.ShiftKey => [Keys.LShiftKey, Keys.RShiftKey],
+                Keys.ControlKey => [Keys.LControlKey, Keys.RControlKey],
+                Keys.Menu => [Keys.LMenu, Keys.RMenu],
+                _ => [],
+            };
+
+            foreach (var side in sides)
+                codes.Add((int)side);
+        }
+
+        KeyWatch.AllowUnderModifiers([.. codes]);
+        _playerKeysAllowedFor = codes.Count > 0 ? who : null;
+
+        return true;
+    }
+
+    /// <summary>The caller whose keys KeyWatch lets through under this plugin's modifiers, or null. See AllowPlayerKeys.</summary>
+    private string _playerKeysAllowedFor;
+
+    /// <summary>Drops the keys a caller let through, when that caller named them. Called wherever its claim ends.</summary>
+    private void ForgetAllowedPlayerKeys(string who)
+    {
+        if (who == null || !string.Equals(who, _playerKeysAllowedFor, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        KeyWatch.AllowUnderModifiers([]);
+        _playerKeysAllowedFor = null;
+    }
+
+    /// <summary>
     /// For up to KeyWatch.MostBlockMs: every key the player holds is let go, so a walk on WASD stops, and their key-downs
     /// are dropped before the game sees them; key-ups and this plugin's own keys pass. 0 ends a block early. Does not need
     /// the cursor, as a pickup's walk outlasts the click: the block runs to its time unless ended. Mouse buttons are not
@@ -1288,6 +1350,7 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
             MouseBlock.Stop();
 
         ForgetKeyStop(who);
+        ForgetAllowedPlayerKeys(who);
         FadePlan(who, "the caller handed the cursor back");
         _clicksOnArrival.Remove(who);
         _loiterKeys.Remove(who);
@@ -1400,6 +1463,7 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
             FadePlan(_held, "the caller's claim on the cursor lapsed");
             MouseBlock.Stop();
             ForgetKeyStop(_held);
+            ForgetAllowedPlayerKeys(_held);
             _clicksOnArrival.Remove(_held);
             _loiterKeys.Remove(_held);
             _loiterOnPlanned.Remove(_held);
@@ -1430,6 +1494,7 @@ public partial class ExileInput : BaseSettingsPlugin<ExileInputSettings>
         PointerFor(who).IgnorePlayerFor(0);
         MouseBlock.Stop();
         ForgetKeyStop(who);
+        ForgetAllowedPlayerKeys(who);
         _clicksOnArrival.Remove(who);
         _lease.Release(who);
         _held = null;

@@ -17,7 +17,8 @@ namespace ExileInput;
 ///
 /// And while this plugin holds Ctrl, Shift or Alt (InputOut.ModifierHeld), the hook is in whether or not anything watches or blocks, and every
 /// key-down of the player's is swallowed - never reaching Windows or the game - and queued for the holder to be stopped,
-/// with its up and repeats swallowed too. See KeyGuard and ExileInput.StopForSwallowedKeys.
+/// with its up and repeats swallowed too, but for any key the holder allows (AllowUnderModifiers). See KeyGuard and
+/// ExileInput.StopForSwallowedKeys.
 /// </summary>
 internal static class KeyWatch
 {
@@ -315,6 +316,16 @@ internal static class KeyWatch
 
     private const int VkCapital = 0x14;
 
+    /// <summary>
+    /// The keys the holder of the cursor lets the player press while this plugin holds a modifier, by virtual-key code;
+    /// empty for none. Written on the plugin's thread and read on the hook's, so the array is replaced whole and never
+    /// changed in place. See ExileInput.AllowPlayerKeys and KeyGuard.
+    /// </summary>
+    private static volatile int[] _allowedUnderModifiers = [];
+
+    /// <summary>Sets the keys the player may press under this plugin's modifiers, replacing those before; empty for none.</summary>
+    public static void AllowUnderModifiers(int[] keys) => _allowedUnderModifiers = keys ?? [];
+
     private static IntPtr Hook(int code, IntPtr message, IntPtr data)
     {
         if (code >= 0 && AlwaysPasses((int)Marshal.PtrToStructure<KeyHookInfo>(data).VirtualKey))
@@ -391,7 +402,12 @@ internal static class KeyWatch
             var alreadyDown = down && !own && modifierHeld && !InputOut.HoldsSameModifier((System.Windows.Forms.Keys)key) &&
                               (GetAsyncKeyState(key) & 0x8000) != 0;
 
-            var verdict = Swallowing.OnKey(key, down, own, modifierHeld, alreadyDown, Environment.TickCount64);
+            // A key the holder lets through. Never a modifier this plugin holds: the player's up of it would let go of
+            // this plugin's own.
+            var allowed = !own && Array.IndexOf(_allowedUnderModifiers, key) >= 0 &&
+                          !InputOut.HoldsSameModifier((System.Windows.Forms.Keys)key);
+
+            var verdict = Swallowing.OnKey(key, down, own, modifierHeld, alreadyDown, allowed, Environment.TickCount64);
 
             if (!verdict.Swallow)
                 return false;
