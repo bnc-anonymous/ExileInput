@@ -98,8 +98,8 @@ public sealed class ExileInputClient
 
     private bool _looked;
 
-    /// <summary>When the first lookup ran, and when the last retry did. See Look.</summary>
-    private DateTime _lookedAt;
+    /// <summary>When the input plugin was first found, and when the last lookup ran. See Look.</summary>
+    private DateTime _foundAt;
 
     private DateTime _tried;
 
@@ -157,20 +157,23 @@ public sealed class ExileInputClient
         // reload that does not fix it - the fix being to reload the OTHER plugin afterwards, which
         // is a rule nobody should have to know.
         //
-        // So a binding that came back empty is retried, slowly, for a while. Once everything asked
-        // for is in hand it latches as before and costs nothing; against an older input plugin that
-        // genuinely lacks a method, it gives up after a minute rather than asking for ever.
-        if (_looked && (_drag != null || DateTime.UtcNow - _lookedAt > TimeSpan.FromSeconds(60)))
+        // So a binding that came back empty is retried, slowly. Once everything asked for is in hand
+        // it latches as before and costs nothing; against an older input plugin that genuinely lacks
+        // a method, it gives up a minute after the plugin was found rather than asking for ever.
+        //
+        // **Until the input plugin is found at all, it goes on asking**, every two seconds. A minute
+        // from the first lookup was the limit before, and it was too short for a plugin that starts
+        // disabled: ExileInput registers its methods when it is first enabled, and enabled any later
+        // than a minute after this client first looked, it was never seen - the consumer went on
+        // saying it was not running until the HUD was restarted. A dictionary lookup every two
+        // seconds costs nothing.
+        if (_take != null && (_drag != null || DateTime.UtcNow - _foundAt > TimeSpan.FromSeconds(60)))
             return;
 
         if (_looked && DateTime.UtcNow - _tried < TimeSpan.FromSeconds(2))
             return;
 
         _tried = DateTime.UtcNow;
-
-        if (!_looked)
-            _lookedAt = DateTime.UtcNow;
-
         _looked = true;
 
         try
@@ -181,6 +184,10 @@ public sealed class ExileInputClient
                 return;
 
             _take = b.GetMethod<Func<string, bool>>("ExileInput.Take");
+
+            if (_take != null && _foundAt == default)
+                _foundAt = DateTime.UtcNow;
+
             _release = b.GetMethod<Func<string, bool>>("ExileInput.Release");
             _moveTo = b.GetMethod<Func<string, RectangleF, bool, bool, bool>>("ExileInput.MoveTo");
             _moveToPoint = b.GetMethod<Func<string, Vector2, bool, bool, bool>>("ExileInput.MoveToPoint");
