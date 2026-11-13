@@ -23,6 +23,16 @@
       <HintPath>$(exapiPackage)\GameOffsets.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <!--
+      The HUD's own ImGui wrapper, Hexa.NET.ImGui (ImGui 1.92). The HUD no longer builds plugins against ImGui.NET: it
+      takes that package out of a plugin's project and puts this reference and a global using of it in, so both are
+      written here and a build outside the HUD matches the HUD's.
+    -->
+    <Reference Include="Hexa.NET.ImGui">
+      <HintPath>$(exapiPackage)\Hexa.NET.ImGui.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Using Include="Hexa.NET.ImGui" />
   </ItemGroup>
 
   <!--
@@ -68,10 +78,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ImGui.NET" Version="1.90.0.1" />
     <PackageReference Include="SharpDX.Mathematics" Version="4.2.0" />
-    <!-- For [JsonIgnore] on the settings' drawn-only nodes. The same version AutoExpedition builds against. -->
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <!-- For [JsonIgnore] on the settings' drawn-only nodes. The version the HUD ships, which it sets when it builds. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
   <ItemGroup>
     <!--

@@ -380,47 +380,47 @@ public class ExileInputSettings : ISettings
     {
         var seed = Seed;
 
-        ImGuiNET.ImGui.SetNextItemWidth(160f);
+        Hexa.NET.ImGui.ImGui.SetNextItemWidth(160f);
 
-        if (ImGuiNET.ImGui.InputInt("Seed##exileInput2Seed", ref seed, 0, 0))
+        if (Hexa.NET.ImGui.ImGui.InputInt("Seed##exileInput2Seed", ref seed, 0, 0))
             Seed = seed;
 
-        ImGuiNET.ImGui.SameLine();
+        Hexa.NET.ImGui.ImGui.SameLine();
 
-        if (ImGuiNET.ImGui.Button("New seed##exileInput2NewSeed"))
+        if (Hexa.NET.ImGui.ImGui.Button("New seed##exileInput2NewSeed"))
             Seed = NewSeed();
 
-        ImGuiNET.ImGui.SameLine();
+        Hexa.NET.ImGui.ImGui.SameLine();
 
-        if (ImGuiNET.ImGui.Button("Reset to defaults##exileInput2Reset"))
+        if (Hexa.NET.ImGui.ImGui.Button("Reset to defaults##exileInput2Reset"))
             ResetToDefaults();
 
-        ImGuiNET.ImGui.SameLine();
-        ImGuiNET.ImGui.TextDisabled("(?)");
+        Hexa.NET.ImGui.ImGui.SameLine();
+        Hexa.NET.ImGui.ImGui.TextDisabled("(?)");
 
-        if (ImGuiNET.ImGui.IsItemHovered())
-            ImGuiNET.ImGui.SetTooltip(SeedHelp);
+        if (Hexa.NET.ImGui.ImGui.IsItemHovered())
+            Hexa.NET.ImGui.ImGui.SetTooltip(SeedHelp);
 
-        ImGuiNET.ImGui.Spacing();
-        ImGuiNET.ImGui.TextDisabled(Seed == 0 ? "With seed 0, the sliders as they are:" : "With this seed, as used:");
+        Hexa.NET.ImGui.ImGui.Spacing();
+        Hexa.NET.ImGui.ImGui.TextDisabled(Seed == 0 ? "With seed 0, the sliders as they are:" : "With this seed, as used:");
 
         for (var i = 0; i < Varied.Length; i++)
         {
             var (name, node) = Varied[i];
             var change = (SeedFactor(Seed, i) - 1f) * 100f;
 
-            ImGuiNET.ImGui.TextUnformatted($"  {name}: {Used(i)}" +
+            Hexa.NET.ImGui.ImGui.TextUnformatted($"  {name}: {Used(i)}" +
                                 (Seed == 0 ? "" : $"   (slider {node.Value}, {(change >= 0 ? "+" : "")}{change:0}%)"));
         }
 
         var hold = UsedClickHold;
         var modifier = UsedModifierTiming;
 
-        ImGuiNET.ImGui.TextUnformatted($"  Click Hold (ms): {hold.Least} / {hold.Usual} / {hold.Most}" +
+        Hexa.NET.ImGui.ImGui.TextUnformatted($"  Click Hold (ms): {hold.Least} / {hold.Usual} / {hold.Most}" +
                             (Seed == 0 ? "" : "   (shortest / usual / longest, each up to 5% from its slider)"));
-        ImGuiNET.ImGui.TextUnformatted($"  Modifier Timing (ms): {modifier.Least} / {modifier.Usual} / {modifier.Most}");
-        ImGuiNET.ImGui.TextUnformatted($"  Key Hold (ms): {UsedKeyHold.Least} / {UsedKeyHold.Usual} / {UsedKeyHold.Most}");
-        ImGuiNET.ImGui.TextUnformatted($"  Key Gap (ms): {UsedKeyGap.Least} / {UsedKeyGap.Usual} / {UsedKeyGap.Most}");
+        Hexa.NET.ImGui.ImGui.TextUnformatted($"  Modifier Timing (ms): {modifier.Least} / {modifier.Usual} / {modifier.Most}");
+        Hexa.NET.ImGui.ImGui.TextUnformatted($"  Key Hold (ms): {UsedKeyHold.Least} / {UsedKeyHold.Usual} / {UsedKeyHold.Most}");
+        Hexa.NET.ImGui.ImGui.TextUnformatted($"  Key Gap (ms): {UsedKeyGap.Least} / {UsedKeyGap.Usual} / {UsedKeyGap.Most}");
     }
 
     /// <summary>Every slider and switch back to its default. The seed is left as it is.</summary>
@@ -499,7 +499,7 @@ public class AdvancedSettings
     {
         var use = UseHardwareInput.Value;
 
-        if (ImGuiNET.ImGui.Checkbox("Use Hardware Input##exileInputHardwareInput", ref use))
+        if (Hexa.NET.ImGui.ImGui.Checkbox("Use Hardware Input##exileInputHardwareInput", ref use))
         {
             // Not ticked at all on a system without the boards; one with them is opened by the plugin's next tick.
             if (use && Boards.Unavailable() is { } why)
@@ -519,26 +519,26 @@ public class AdvancedSettings
 
         if (!use && SwitchedOff is { Length: > 0 } off)
         {
-            ImGuiNET.ImGui.PushStyleColor(ImGuiNET.ImGuiCol.Text, new System.Numerics.Vector4(1f, 0.35f, 0.35f, 1f));
-            ImGuiNET.ImGui.TextWrapped($"Switched itself off: {off}");
-            ImGuiNET.ImGui.PopStyleColor();
+            Hexa.NET.ImGui.ImGui.PushStyleColor(Hexa.NET.ImGui.ImGuiCol.Text, new System.Numerics.Vector4(1f, 0.35f, 0.35f, 1f));
+            Hexa.NET.ImGui.ImGui.TextWrapped($"Switched itself off: {off}");
+            Hexa.NET.ImGui.ImGui.PopStyleColor();
 
-            if (ImGuiNET.ImGui.Button("Dismiss the warning##exileInputSwitchedOff"))
+            if (Hexa.NET.ImGui.ImGui.Button("Dismiss the warning##exileInputSwitchedOff"))
                 SwitchedOff = "";
         }
 
         if (use && Boards.Status is { Length: > 0 } status)
-            ImGuiNET.ImGui.TextDisabled(status);
+            Hexa.NET.ImGui.ImGui.TextDisabled(status);
 
         if (!use)
             Warn(Boards.Warning);
 
         // Kept as set while hardware input is off, and greyed out: it means nothing without the boards.
-        ImGuiNET.ImGui.BeginDisabled(!use);
+        Hexa.NET.ImGui.ImGui.BeginDisabled(!use);
 
         var reroute = RerouteOtherInput.Value;
 
-        if (ImGuiNET.ImGui.Checkbox("Reroute Other Plugin Inputs##exileInputReroute", ref reroute))
+        if (Hexa.NET.ImGui.ImGui.Checkbox("Reroute Other Plugin Inputs##exileInputReroute", ref reroute))
         {
             RerouteOtherInput.Value = reroute;
 
@@ -546,7 +546,7 @@ public class AdvancedSettings
                 Reroute.Warning = "";
         }
 
-        ImGuiNET.ImGui.EndDisabled();
+        Hexa.NET.ImGui.ImGui.EndDisabled();
         Help("Send other plugins' input (e.g. ReAgent) through the boards too.");
 
         if (!reroute)
@@ -555,11 +555,11 @@ public class AdvancedSettings
 
     private static void Help(string text)
     {
-        ImGuiNET.ImGui.SameLine();
-        ImGuiNET.ImGui.TextDisabled("(?)");
+        Hexa.NET.ImGui.ImGui.SameLine();
+        Hexa.NET.ImGui.ImGui.TextDisabled("(?)");
 
-        if (ImGuiNET.ImGui.IsItemHovered())
-            ImGuiNET.ImGui.SetTooltip(text);
+        if (Hexa.NET.ImGui.ImGui.IsItemHovered())
+            Hexa.NET.ImGui.ImGui.SetTooltip(text);
     }
 
     private static void Warn(string text)
@@ -567,8 +567,8 @@ public class AdvancedSettings
         if (string.IsNullOrEmpty(text))
             return;
 
-        ImGuiNET.ImGui.PushTextWrapPos(0f);
-        ImGuiNET.ImGui.TextColored(new System.Numerics.Vector4(1f, 0.75f, 0.2f, 1f), text);
-        ImGuiNET.ImGui.PopTextWrapPos();
+        Hexa.NET.ImGui.ImGui.PushTextWrapPos(0f);
+        Hexa.NET.ImGui.ImGui.TextColored(new System.Numerics.Vector4(1f, 0.75f, 0.2f, 1f), text);
+        Hexa.NET.ImGui.ImGui.PopTextWrapPos();
     }
 }
